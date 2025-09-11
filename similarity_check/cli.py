@@ -9,14 +9,14 @@ import numpy as np
 from rich.console import Console
 from rich.table import Table
 
-from .features import (
+from similarity_check.features import (
     load_model,
     extract_video_features,
     save_feature_cache,
     load_feature_cache,
     make_video_thumbnail_with_pose,
 )
-from .similarity import rank_similar
+from similarity_check.similarity import rank_similar
 
 
 def find_videos(path: str) -> List[str]:
@@ -134,4 +134,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
