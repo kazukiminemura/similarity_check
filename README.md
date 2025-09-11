@@ -21,6 +21,17 @@ pip install -r requirements.txt
 pip install -r requirements-ui.txt
 ```
 
+## ルートから実行（Python）
+- リポジトリ直下でそのまま実行できます。
+
+```bash
+python main.py --target path/to/target.mp4 --candidates path/to/video_dir --topk 5 --frame-stride 5 --model yolov8n-pose.pt
+```
+
+同等の実行（好みで選択）:
+- `python -m similarity_check.cli ...`
+- `python -m similarity_check ...`（パッケージ実行）
+
 ## CLI（詳細）
 - 実行例:
 ```bash
