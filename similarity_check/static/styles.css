@@ -1,6 +1,7 @@
 /* minimal styles, most styling inline for brevity */
-body { margin: 16px; }
+body { margin: 0; }
 button { cursor: pointer; }
 .grid { margin-top: 8px; }
 .cell { box-shadow: 0 0 0 1px #333 inset; }
 .label { font-size: 14px; }
+video { width: 100%; height: auto; aspect-ratio: 16 / 9; display: block; object-fit: contain; }
