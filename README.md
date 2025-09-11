@@ -54,9 +54,13 @@ python -m similarity_check.quickstart
 ```
 
 ## Streamlit UI
+FastAPI版のWeb UI（推奨）
 ```bash
-streamlit run similarity_check/app_streamlit.py
+pip install -r requirements.txt
+python -m similarity_check.web_api
+# ブラウザで http://127.0.0.1:8000 を開く
 ```
+動画ファイルは既定で `data/` を配信します（環境変数 `VIDEO_ROOT` で変更可）。
 
 ## 仕組み（概要）
 - フレーム毎に最も信頼度の高い人物の17点キーポイントを取得

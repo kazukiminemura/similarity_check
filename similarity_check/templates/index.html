@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pose Similarity (FastAPI)</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script defer src="/static/app.js"></script>
+  <style>
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .cell { background: #111; padding: 8px; border-radius: 6px; }
+    .label { font-weight: bold; margin: 4px 0; color: #eee; }
+    video { width: 100%; background: #000; }
+    header { margin-bottom: 12px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0b0c10; color: #f4f4f4; }
+    input, select, button { padding: 6px 10px; margin: 4px; }
+  </style>
+  <script>
+    window.VIDEO_ROOT = "{{ video_root }}";
+  </script>
+</head>
+<body>
+  <header>
+    <h2>動画ポーズ類似検索 (YOLOv8-Pose / FastAPI)</h2>
+    <div>
+      <label>対象動画:</label>
+      <select id="target-select"></select>
+      <label>候補（ディレクトリ内全動画）:</label>
+      <span id="cand-root"></span>
+      <label>TopK:</label>
+      <input type="number" id="topk" min="1" max="20" value="5"/>
+      <label>Frame stride:</label>
+      <input type="number" id="stride" min="1" max="30" value="5"/>
+      <button id="search-btn">検索</button>
+    </div>
+    <div>
+      <button id="play-all">再生</button>
+      <button id="pause-all">一時停止</button>
+      <label><input type="checkbox" id="sync-toggle" checked /> 同期再生</label>
+    </div>
+  </header>
+
+  <main>
+    <div id="grid" class="grid"></div>
+  </main>
+
+  <footer style="margin-top: 16px; opacity: .8;">
+    <small>VIDEO_ROOT: {{ video_root }}</small>
+  </footer>
+</body>
+</html>
+
