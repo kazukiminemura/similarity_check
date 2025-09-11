@@ -1,0 +1,162 @@
+import os.path as osp
+from typing import List, Tuple, Optional
+
+import cv2
+import numpy as np
+
+
+def _safe_fps(cap: cv2.VideoCapture, default: float = 25.0) -> float:
+    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    if not np.isfinite(fps) or fps <= 1e-3:
+        return default
+    return float(fps)
+
+
+def _frame_count(cap: cv2.VideoCapture) -> int:
+    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    return n if n > 0 else 0
+
+
+def _duration_seconds(cap: cv2.VideoCapture) -> float:
+    fps = _safe_fps(cap)
+    n = _frame_count(cap)
+    return n / fps if fps > 0 else 0.0
+
+
+def _fit_into_canvas(img: np.ndarray, dst_w: int, dst_h: int) -> np.ndarray:
+    h, w = img.shape[:2]
+    if h == 0 or w == 0:
+        return np.zeros((dst_h, dst_w, 3), dtype=np.uint8)
+    scale = min(dst_w / w, dst_h / h)
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+    resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    canvas = np.zeros((dst_h, dst_w, 3), dtype=np.uint8)
+    x0 = (dst_w - new_w) // 2
+    y0 = (dst_h - new_h) // 2
+    canvas[y0:y0 + new_h, x0:x0 + new_w] = resized
+    return canvas
+
+
+def make_sync_grid_video(
+    target_path: str,
+    candidate_paths: List[str],
+    out_path: str = "results_sync_grid.mp4",
+    rows: int = 2,
+    cols: int = 3,
+    cell_size: Optional[Tuple[int, int]] = None,
+    fps: Optional[float] = None,
+    max_seconds: Optional[float] = None,
+) -> str:
+    """
+    Create a synchronized grid video: target in top-left, followed by up to 5 candidates.
+    Returns the output video path.
+    """
+    paths = [target_path] + list(candidate_paths[: rows * cols - 1])
+    # Open captures
+    caps = []
+    for p in paths:
+        cap = cv2.VideoCapture(p)
+        if not cap.isOpened():
+            # Fill with dummy capture by using a single black frame
+            caps.append(None)
+        else:
+            caps.append(cap)
+
+    # Determine fps and duration
+    src_fps = [(_safe_fps(c) if c is not None else 25.0) for c in caps]
+    out_fps = float(min(src_fps)) if fps is None else float(fps)
+    src_durs = [(_duration_seconds(c) if c is not None else 0.0) for c in caps]
+    duration = float(min(src_durs))
+    if max_seconds is not None:
+        duration = min(duration, float(max_seconds))
+    if duration <= 0:
+        duration = 1.0
+
+    # Determine cell size
+    if cell_size is None:
+        # Use first readable frame size or fallback 320x180
+        cell_w, cell_h = 320, 180
+        for c in caps:
+            if c is None:
+                continue
+            ret, fr = c.read()
+            if ret and fr is not None:
+                h, w = fr.shape[:2]
+                if h > 0 and w > 0:
+                    # Keep 16:9 aspect if possible
+                    cell_w = 320
+                    cell_h = int(cell_w * h / max(1, w))
+                break
+        # reset to frame 0 for those we advanced
+        for c in caps:
+            if c is not None:
+                c.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    else:
+        cell_w, cell_h = cell_size
+
+    grid_w = cols * cell_w
+    grid_h = rows * cell_h
+
+    # Prepare writer
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(out_path, fourcc, out_fps, (grid_w, grid_h))
+    total_frames = int(out_fps * duration)
+
+    # Precompute index mapping per out frame
+    src_indices = []
+    for i, c in enumerate(caps):
+        fps_i = src_fps[i]
+        n_i = _frame_count(c) if c is not None else 1
+        idxs = [min(n_i - 1, max(0, int(round(t * fps_i / out_fps)))) for t in range(total_frames)]
+        src_indices.append(idxs)
+
+    # Render frames
+    last_frames: List[np.ndarray] = [None] * len(caps)  # type: ignore
+    for t in range(total_frames):
+        tiles = []
+        for i, c in enumerate(caps):
+            frame = None
+            idx = src_indices[i][t]
+            if c is not None:
+                c.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                ok, fr = c.read()
+                if ok and fr is not None:
+                    frame = fr
+            if frame is None:
+                frame = last_frames[i]
+            if frame is None:
+                frame = np.zeros((cell_h, cell_w, 3), dtype=np.uint8)
+            # fit to cell
+            tile = _fit_into_canvas(frame, cell_w, cell_h)
+            last_frames[i] = tile
+            tiles.append(tile)
+
+        # compose grid
+        rows_imgs = []
+        k = 0
+        for r in range(rows):
+            row = np.hstack(tiles[k:k + cols])
+            rows_imgs.append(row)
+            k += cols
+        grid = np.vstack(rows_imgs)
+
+        # overlay labels
+        for i, p in enumerate(paths):
+            r = i // cols
+            c = i % cols
+            x0 = c * cell_w
+            y0 = r * cell_h
+            label = "Target" if i == 0 else f"Top {i}"
+            name = osp.basename(p)
+            cv2.rectangle(grid, (x0, y0), (x0 + cell_w, y0 + 28), (0, 0, 0), -1)
+            cv2.putText(grid, f"{label}: {name}", (x0 + 8, y0 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+
+        writer.write(grid)
+
+    writer.release()
+    for c in caps:
+        if c is not None:
+            c.release()
+    return out_path
+
