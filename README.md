@@ -25,7 +25,7 @@ pip install -r requirements-ui.txt
 - リポジトリ直下でそのまま実行できます。
 
 ```bash
-python main.py --target path/to/target.mp4 --candidates path/to/video_dir --topk 5 --frame-stride 5 --model yolov8n-pose.pt
+python main.py --target path/to/target.mp4 --candidates path/to/video_dir --topk 5 --frame-stride 5
 ```
 
 同等の実行（好みで選択）:
@@ -39,8 +39,7 @@ python -m similarity_check.cli \
   --target path/to/target.mp4 \
   --candidates path/to/video_dir \
   --topk 5 \
-  --frame-stride 5 \
-  --model yolov8n-pose.pt
+  --frame-stride 5
 ```
 - 出力:
   - 類似度ランキングをコンソール表示
