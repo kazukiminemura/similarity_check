@@ -117,7 +117,7 @@ def main():
     thumbs: List[Tuple[str, float, np.ndarray]] = []
     for i, (path, score) in enumerate(ranked[:topk], 1):
         table.add_row(str(i), f"{score:.3f}", path)
-        if not args.no-visualize:
+        if not args.no_visualize:
             try:
                 img = make_video_thumbnail_with_pose(path, model)
             except Exception:
@@ -127,7 +127,7 @@ def main():
 
     console.print(table)
 
-    if thumbs and not args.no-visualize:
+    if thumbs and not args.no_visualize:
         out = save_montage(thumbs, out_path="results_montage.jpg")
         console.print(f"Saved thumbnails montage: {out}")
 
