@@ -23,6 +23,24 @@ def _ensure_dir(path: str) -> None:
         os.makedirs(path, exist_ok=True)
 
 
+def _to_numpy(x):
+    """Convert torch.Tensor or similar to numpy array; return None on failure."""
+    if x is None:
+        return None
+    if isinstance(x, np.ndarray):
+        return x
+    try:
+        import torch  # type: ignore
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy()
+    except Exception:
+        pass
+    try:
+        return np.asarray(x)
+    except Exception:
+        return None
+
+
 def load_model(model_name: str = "yolov8n-pose.pt"):
     if YOLO is None:
         raise RuntimeError(
@@ -117,8 +135,8 @@ def extract_video_features(
         r0 = results[0]
         if r0.keypoints is None or r0.keypoints.xyn is None:
             continue
-        xyn = r0.keypoints.xyn  # (N,17,2)
-        conf = r0.keypoints.conf  # (N,17)
+        xyn = _to_numpy(r0.keypoints.xyn)  # (N,17,2)
+        conf = _to_numpy(r0.keypoints.conf)  # (N,17)
         if xyn is None or conf is None or len(xyn) == 0:
             continue
 
@@ -184,8 +202,10 @@ def make_video_thumbnail_with_pose(
     r0 = results[0]
     if r0.keypoints is None or r0.keypoints.xy is None or r0.keypoints.conf is None:
         return frame
-    xy = r0.keypoints.xy
-    conf = r0.keypoints.conf
+    xy = _to_numpy(r0.keypoints.xy)
+    conf = _to_numpy(r0.keypoints.conf)
+    if xy is None or conf is None or len(xy) == 0:
+        return frame
     idx = _select_main_person(conf)
     if idx < 0:
         return frame
@@ -210,4 +230,3 @@ def load_feature_cache(cache_dir: str, video_path: str) -> Optional[np.ndarray]:
         return data["vector"]
     except Exception:
         return None
-
