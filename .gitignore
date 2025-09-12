@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 results_montage.jpg
 .DS_Store
+yolov8n-pose_openvino_model/
