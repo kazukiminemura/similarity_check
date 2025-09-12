@@ -158,6 +158,107 @@ async def list_videos():
     return {"root": REFERENCE_ROOT, "target_root": TARGET_ROOT, "reference_root": REFERENCE_ROOT, "videos": items}
 
 
+@app.get("/api/clips")
+@debug_log
+async def list_clips():
+    if not osp.isdir(CLIP_DIR):
+        return {"clips": []}
+    items = sorted([f for f in os.listdir(CLIP_DIR) if _is_video(f)])
+    return {"clips": items}
+
+
+@app.post("/api/search_clips")
+@debug_log
+async def search_clips(payload: dict):
+    target_name = payload.get("target")
+    topk = int(payload.get("topk", 5))
+    frame_stride = int(payload.get("frame_stride", 5))
+    device = payload.get("device", "AUTO")
+    recompute = bool(payload.get("recompute", False))
+
+    if not target_name:
+        raise HTTPException(status_code=400, detail="target is required")
+
+    tgt_path = target_name
+    if not osp.isabs(tgt_path):
+        tgt_path = osp.join(CLIP_DIR, tgt_path)
+    if not osp.isfile(tgt_path):
+        raise HTTPException(status_code=404, detail=f"Target not found: {tgt_path}")
+
+    # Collect candidate clips (all in clip dir except the target)
+    if not osp.isdir(CLIP_DIR):
+        raise HTTPException(status_code=404, detail=f"Clip directory not found: {CLIP_DIR}")
+    cand_paths: List[Tuple[str, object]] = []
+    for f in sorted(os.listdir(CLIP_DIR)):
+        if not _is_video(f):
+            continue
+        p = osp.join(CLIP_DIR, f)
+        if osp.abspath(p) == osp.abspath(tgt_path):
+            continue
+        cand_paths.append((p, None))
+
+    model = _ensure_model()
+
+    # Use a separate cache dir for clips
+    cache_dir = "features_cache_clips"
+
+    # Optionally clear caches
+    if recompute:
+        try:
+            base = osp.splitext(osp.basename(tgt_path))[0]
+            cpath = osp.join(cache_dir, f"{base}.npz")
+            if osp.exists(cpath):
+                os.remove(cpath)
+            for p, _ in cand_paths:
+                b = osp.splitext(osp.basename(p))[0]
+                cp = osp.join(cache_dir, f"{b}.npz")
+                if osp.exists(cp):
+                    os.remove(cp)
+        except Exception:
+            pass
+
+    # Target features (no swing windowing, clips are already trimmed)
+    vec = load_feature_cache(cache_dir, tgt_path)
+    if vec is None:
+        info = extract_video_features(
+            tgt_path, model, frame_stride=frame_stride, device=device, swing_only=False
+        )
+        vec = info["vector"]
+        save_feature_cache(cache_dir, tgt_path, vec, frame_stride=frame_stride)
+
+    # Candidates
+    cand_vecs: List[Tuple[str, object]] = []
+    for p, _ in cand_paths:
+        v = load_feature_cache(cache_dir, p)
+        if v is None:
+            info = extract_video_features(
+                p, model, frame_stride=frame_stride, device=device, swing_only=False
+            )
+            v = info["vector"]
+            save_feature_cache(cache_dir, p, v, frame_stride=frame_stride)
+        cand_vecs.append((p, v))
+
+    ranked = rank_similar(vec, cand_vecs)[:topk]
+    results = [
+        {
+            "path": p,
+            "name": osp.basename(p),
+            "score": float(score),
+            "url": "/clips/" + osp.basename(p),
+        }
+        for (p, score) in ranked
+    ]
+    return {
+        "used_device": device,
+        "target": {
+            "path": tgt_path,
+            "name": osp.basename(tgt_path),
+            "url": "/clips/" + osp.basename(tgt_path),
+        },
+        "results": results,
+    }
+
+
 @app.post("/api/search")
 @debug_log
 async def search(payload: dict):
