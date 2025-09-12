@@ -192,64 +192,78 @@ async def search(payload: dict):
 
     model = _ensure_model()
 
-    # Target features (with cache) - swing-only cache dir
-    cache_dir = "features_cache_swing" if swing_only else "features_cache"
-    vec = load_feature_cache(cache_dir, tgt_path)
-    if vec is None:
-        info = extract_video_features(
-            tgt_path,
-            model,
-            frame_stride=frame_stride,
-            device=device,
-            swing_only=swing_only,
-            swing_seconds=swing_seconds,
-        )
-        vec = info["vector"]
-        save_feature_cache(cache_dir, tgt_path, vec)
-
-    # Candidates
-    cand_paths: List[Tuple[str, object]] = []
-    if osp.isdir(cand_dir):
-        for f in sorted(os.listdir(cand_dir)):
-            if not _is_video(f):
-                continue
-            p = osp.join(cand_dir, f)
-            if osp.abspath(p) == osp.abspath(tgt_path):
-                continue
-            cand_paths.append((p, None))
-    elif osp.isfile(cand_dir):
-        if osp.abspath(cand_dir) != osp.abspath(tgt_path):
-            cand_paths.append((cand_dir, None))
-
-    logger.debug("Candidates discovered: %d", len(cand_paths))
-
-    # Compute features for candidates
-    cand_vecs: List[Tuple[str, object]] = []
-    for p, _ in cand_paths:
-        v = load_feature_cache(cache_dir, p)
-        if v is None:
+    # Helper to run feature extraction pipeline with a specific device
+    def _run_with_device(dev: str):
+        # Target features (with cache) - swing-only cache dir
+        cache_dir = "features_cache_swing" if swing_only else "features_cache"
+        vec = load_feature_cache(cache_dir, tgt_path)
+        if vec is None:
             info = extract_video_features(
-                p,
+                tgt_path,
                 model,
                 frame_stride=frame_stride,
-                device=device,
+                device=dev,
                 swing_only=swing_only,
                 swing_seconds=swing_seconds,
             )
-            v = info["vector"]
-            save_feature_cache(cache_dir, p, v)
-        cand_vecs.append((p, v))
+            vec = info["vector"]
+            save_feature_cache(cache_dir, tgt_path, vec)
 
-    ranked = rank_similar(vec, cand_vecs)[:topk]
-    logger.debug("Ranking complete: returned=%d", len(ranked))
-    results = [
-        {"path": p, "name": osp.basename(p), "score": float(score), "url": _rel_url(p)}
-        for (p, score) in ranked
-    ]
-    return {
-        "target": {"path": tgt_path, "name": osp.basename(tgt_path), "url": _rel_url(tgt_path)},
-        "results": results,
-    }
+        # Candidates
+        cand_paths: List[Tuple[str, object]] = []
+        if osp.isdir(cand_dir):
+            for f in sorted(os.listdir(cand_dir)):
+                if not _is_video(f):
+                    continue
+                p = osp.join(cand_dir, f)
+                if osp.abspath(p) == osp.abspath(tgt_path):
+                    continue
+                cand_paths.append((p, None))
+        elif osp.isfile(cand_dir):
+            if osp.abspath(cand_dir) != osp.abspath(tgt_path):
+                cand_paths.append((cand_dir, None))
+
+        logger.debug("Candidates discovered: %d", len(cand_paths))
+
+        # Compute features for candidates
+        cand_vecs: List[Tuple[str, object]] = []
+        for p, _ in cand_paths:
+            v = load_feature_cache(cache_dir, p)
+            if v is None:
+                info = extract_video_features(
+                    p,
+                    model,
+                    frame_stride=frame_stride,
+                    device=dev,
+                    swing_only=swing_only,
+                    swing_seconds=swing_seconds,
+                )
+                v = info["vector"]
+                save_feature_cache(cache_dir, p, v)
+            cand_vecs.append((p, v))
+
+        ranked = rank_similar(vec, cand_vecs)[:topk]
+        logger.debug("Ranking complete: returned=%d", len(ranked))
+        results = [
+            {"path": p, "name": osp.basename(p), "score": float(score), "url": _rel_url(p)}
+            for (p, score) in ranked
+        ]
+        return {
+            "used_device": dev,
+            "target": {"path": tgt_path, "name": osp.basename(tgt_path), "url": _rel_url(tgt_path)},
+            "results": results,
+        }
+
+    # Try requested device; on failure, retry with CPU
+    try:
+        return _run_with_device(device)
+    except Exception as e:
+        logger.exception("Search failed on device %s, retrying on CPU: %s", device, e)
+        try:
+            return _run_with_device("CPU")
+        except Exception:
+            # Give up; propagate original error
+            raise
 
 
 if __name__ == "__main__":
