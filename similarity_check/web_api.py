@@ -80,7 +80,7 @@ def _resolve_root(env_name: str, default_rel: str) -> str:
     return osp.abspath(osp.join(BASE_DIR, default_rel))
 
 TARGET_ROOT = _resolve_root("TARGET_ROOT", "target")
-REFERENCE_ROOT = _resolve_root("REFERENCE_ROOT", "reference")
+REFERENCE_ROOT = _resolve_root("REFERENCE_ROOT", "pro_data")
 STATIC_DIR = osp.join(osp.dirname(__file__), "static")
 TEMPLATE_DIR = osp.join(osp.dirname(__file__), "templates")
 CLIP_DIR = osp.join(osp.dirname(__file__), "_clips")
@@ -167,7 +167,8 @@ async def search(payload: dict):
     topk = int(payload.get("topk", 5))
     frame_stride = int(payload.get("frame_stride", 5))
     swing_only = bool(payload.get("swing_only", True))
-    swing_seconds = payload.get("swing_seconds", 2.5)\n    recompute = bool(payload.get("recompute", False))
+    swing_seconds = payload.get("swing_seconds", 2.5)
+    recompute = bool(payload.get("recompute", False))
 
     logger.debug("Search request: target=%s candidates_dir=%s device=%s topk=%s stride=%s",
                  target, candidates_dir, device, topk, frame_stride)
