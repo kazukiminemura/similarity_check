@@ -106,7 +106,8 @@ async function init() {
         body: JSON.stringify({ target, device, topk, frame_stride, swing_only, swing_seconds }),
       });
       grid.innerHTML = '';
-      const first = createVideoCell('Target', res.target.url, res.target.name, true, res.target.start, res.target.end);
+      const firstUrl = res.target.clip_url || res.target.url;
+      const first = createVideoCell('Target', firstUrl, res.target.name, true, res.target.start, res.target.end);
       grid.appendChild(first.cell);
       for (let i = 0; i < 5; i++) {
         const item = res.results[i];
@@ -117,7 +118,8 @@ async function init() {
           grid.appendChild(cell);
           continue;
         }
-        const { cell: c } = createVideoCell(`Top ${i+1}`, item.url, item.name, false, item.start, item.end);
+        const url = item.clip_url || item.url;
+        const { cell: c } = createVideoCell(`Top ${i+1}`, url, item.name, false, item.start, item.end);
         grid.appendChild(c);
       }
       setUpSync(grid);

@@ -17,6 +17,7 @@ from similarity_check.features import (
     save_feature_cache,
 )
 from similarity_check.similarity import rank_similar
+from similarity_check.video_utils import make_video_clip
 
 
 # ------------------------------------------------------------------------------
@@ -82,6 +83,7 @@ TARGET_ROOT = _resolve_root("TARGET_ROOT", "target")
 REFERENCE_ROOT = _resolve_root("REFERENCE_ROOT", "reference")
 STATIC_DIR = osp.join(osp.dirname(__file__), "static")
 TEMPLATE_DIR = osp.join(osp.dirname(__file__), "templates")
+CLIP_DIR = osp.join(osp.dirname(__file__), "_clips")
 
 app = FastAPI(title="Pose Similarity (YOLOv8-Pose) API")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -89,6 +91,9 @@ if osp.isdir(TARGET_ROOT):
     app.mount("/videos/target", StaticFiles(directory=TARGET_ROOT), name="videos_target")
 if osp.isdir(REFERENCE_ROOT):
     app.mount("/videos/reference", StaticFiles(directory=REFERENCE_ROOT), name="videos_reference")
+if not osp.isdir(CLIP_DIR):
+    os.makedirs(CLIP_DIR, exist_ok=True)
+app.mount("/clips", StaticFiles(directory=CLIP_DIR), name="clips")
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
 
 _model = None
@@ -260,12 +265,31 @@ async def search(payload: dict):
         results = []
         for (p, score) in ranked:
             item = {"path": p, "name": osp.basename(p), "score": float(score), "url": _rel_url(p)}
+            if swing_only:
+                # try read window meta from cache if available
+                try:
+                    from similarity_check.features import load_feature_meta as _lfm
+                    meta = _lfm(cache_dir, p)
+                    ws = meta.get("window_start_sec")
+                    we = meta.get("window_end_sec")
+                    if ws is not None and we is not None:
+                        item["start"], item["end"] = float(ws), float(we)
+                        clip_path = make_video_clip(p, float(ws), float(we), CLIP_DIR, basename=osp.splitext(osp.basename(p))[0])
+                        if clip_path and osp.exists(clip_path):
+                            item["clip_url"] = "/clips/" + osp.basename(clip_path)
+                except Exception:
+                    pass
             results.append(item)
-        return {
-            "used_device": dev,
-            "target": {"path": tgt_path, "name": osp.basename(tgt_path), "url": _rel_url(tgt_path), **({"start": float(tgt_window[0]), "end": float(tgt_window[1])} if swing_only and tgt_window else {})},
-            "results": results,
-        }
+
+        target_entry = {"path": tgt_path, "name": osp.basename(tgt_path), "url": _rel_url(tgt_path)}
+        if swing_only and tgt_window:
+            tws, twe = tgt_window
+            target_entry["start"], target_entry["end"] = float(tws), float(twe)
+            clip_path = make_video_clip(tgt_path, float(tws), float(twe), CLIP_DIR, basename=osp.splitext(osp.basename(tgt_path))[0])
+            if clip_path and osp.exists(clip_path):
+                target_entry["clip_url"] = "/clips/" + osp.basename(clip_path)
+
+        return {"used_device": dev, "target": target_entry, "results": results}
 
     # Try requested device; on failure, retry with CPU
     try:

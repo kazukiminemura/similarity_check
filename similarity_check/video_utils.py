@@ -159,4 +159,75 @@ def make_sync_grid_video(
         if c is not None:
             c.release()
     return out_path
+import os
+import os.path as osp
+from typing import Optional
+
+import cv2
+
+
+def ensure_dir(path: str) -> None:
+    if path and not osp.isdir(path):
+        os.makedirs(path, exist_ok=True)
+
+
+def make_video_clip(src_path: str, start_sec: float, end_sec: float, out_dir: str, basename: Optional[str] = None) -> Optional[str]:
+    """
+    Save a clipped segment [start_sec, end_sec] from src_path into out_dir.
+    Returns the output file path on success, otherwise None.
+    """
+    try:
+        if start_sec is None or end_sec is None:
+            return None
+        if end_sec <= start_sec:
+            return None
+        cap = cv2.VideoCapture(src_path)
+        if not cap.isOpened():
+            return None
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        if width <= 0 or height <= 0:
+            cap.release()
+            return None
+
+        start_f = max(0, int(round(start_sec * fps)))
+        end_f = max(start_f + 1, int(round(end_sec * fps)))
+
+        # Prepare writer
+        ensure_dir(out_dir)
+        base = basename or osp.splitext(osp.basename(src_path))[0]
+        name = f"{base}_clip_{start_f}_{end_f}.mp4"
+        out_path = osp.join(out_dir, name)
+
+        # If clip already exists, return it
+        if osp.exists(out_path) and osp.getsize(out_path) > 0:
+            cap.release()
+            return out_path
+
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # widely compatible; requires codecs
+        writer = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
+        fidx = start_f
+        ok_any = False
+        while fidx < end_f:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            writer.write(frame)
+            ok_any = True
+            fidx += 1
+
+        writer.release()
+        cap.release()
+        if not ok_any:
+            try:
+                os.remove(out_path)
+            except Exception:
+                pass
+            return None
+        return out_path
+    except Exception:
+        return None
 
