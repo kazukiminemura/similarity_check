@@ -297,6 +297,8 @@ async def search(payload: dict):
                         clip_path = make_video_clip(p, float(ws), float(we), CLIP_DIR, basename=osp.splitext(osp.basename(p))[0])
                         if clip_path and osp.exists(clip_path):
                             item["clip_url"] = "/clips/" + osp.basename(clip_path)
+                            # Use clip filename (with _clip suffix) as display name
+                            item["name"] = osp.basename(clip_path)
                 except Exception:
                     pass
             results.append(item)
@@ -308,6 +310,8 @@ async def search(payload: dict):
             clip_path = make_video_clip(tgt_path, float(tws), float(twe), CLIP_DIR, basename=osp.splitext(osp.basename(tgt_path))[0])
             if clip_path and osp.exists(clip_path):
                 target_entry["clip_url"] = "/clips/" + osp.basename(clip_path)
+                # Use clip filename (with _clip suffix) as display name
+                target_entry["name"] = osp.basename(clip_path)
 
         return {"used_device": dev, "target": target_entry, "results": results}
 
