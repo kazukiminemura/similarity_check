@@ -1,5 +1,5 @@
-<!DOCTYPE html>
-<html lang="ja">
+﻿<!DOCTYPE html>
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -17,27 +17,31 @@
     input, select, button { padding: 6px 10px; margin: 4px; }
   </style>
   <script>
-    window.VIDEO_ROOT = "{{ video_root }}";
+    window.TARGET_ROOT = "{{ target_root }}";
+    window.REFERENCE_ROOT = "{{ reference_root }}";
   </script>
 </head>
 <body>
   <header>
-    <h2>動画ポーズ類似検索 (YOLOv8-Pose / FastAPI)</h2>
+    <h2>Pose Similarity (YOLOv8-Pose / FastAPI)</h2>
     <div>
-      <label>対象動画:</label>
+      <label>Target video:</label>
       <select id="target-select"></select>
-      <label>候補（ディレクトリ内全動画）:</label>
-      <span id="cand-root"></span>
+      <label for="device-select">Device:</label>
+      <select id="device-select">
+        <option value="cuda" selected>GPU</option>
+        <option value="cpu">CPU</option>
+      </select>
       <label>TopK:</label>
       <input type="number" id="topk" min="1" max="20" value="5"/>
       <label>Frame stride:</label>
       <input type="number" id="stride" min="1" max="30" value="5"/>
-      <button id="search-btn">検索</button>
+      <button id="search-btn">Search</button>
     </div>
     <div>
-      <button id="play-all">再生</button>
-      <button id="pause-all">一時停止</button>
-      <label><input type="checkbox" id="sync-toggle" checked /> 同期再生</label>
+      <button id="play-all">Play</button>
+      <button id="pause-all">Pause</button>
+      <label><input type="checkbox" id="sync-toggle" checked /> Sync play</label>
     </div>
   </header>
 
@@ -46,7 +50,7 @@
   </main>
 
   <footer style="margin-top: 16px; opacity: .8;">
-    <small>VIDEO_ROOT: {{ video_root }}</small>
+    <small>TARGET_ROOT: {{ target_root }} / REFERENCE_ROOT: {{ reference_root }}</small>
   </footer>
 </body>
 </html>

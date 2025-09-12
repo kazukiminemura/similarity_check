@@ -1,4 +1,4 @@
-async function fetchJSON(url, opts) {
+﻿async function fetchJSON(url, opts) {
   const res = await fetch(url, opts);
   if (!res.ok) throw new Error(await res.text());
   return await res.json();
@@ -50,7 +50,7 @@ function setUpSync(gridEl) {
     vids.forEach(v => {
       if (!syncToggle.checked) return;
       const diff = Math.abs(v.currentTime - t);
-      if (diff > 0.12) { // allow small drift
+      if (diff > 0.12) {
         try { v.currentTime = t; } catch(e){}
       }
       if (!m.paused && v.paused) {
@@ -68,22 +68,23 @@ function setUpSync(gridEl) {
 
 async function init() {
   const targetSel = document.getElementById('target-select');
-  const candRoot = document.getElementById('cand-root');
   const grid = document.getElementById('grid');
   const topkEl = document.getElementById('topk');
   const strideEl = document.getElementById('stride');
+  const deviceSel = document.getElementById('device-select');
+
   document.getElementById('search-btn').onclick = async () => {
     const target = targetSel.value;
     const topk = Number(topkEl.value || 5);
     const frame_stride = Number(strideEl.value || 5);
-    grid.innerHTML = '検索中...';
+    const device = (deviceSel?.value || 'cuda');
+    grid.innerHTML = 'Searching...';
     try {
       const res = await fetchJSON('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target, candidates_dir: '.', topk, frame_stride }),
+        body: JSON.stringify({ target, device, topk, frame_stride }),
       });
-      // Build 2x3 grid: target top-left + top5
       grid.innerHTML = '';
       const first = createVideoCell('Target', res.target.url, res.target.name, true);
       grid.appendChild(first.cell);
@@ -96,19 +97,17 @@ async function init() {
           grid.appendChild(cell);
           continue;
         }
-        const { cell: c, vid } = createVideoCell(`Top ${i+1}`, item.url, item.name);
+        const { cell: c } = createVideoCell(`Top ${i+1}`, item.url, item.name);
         grid.appendChild(c);
       }
       setUpSync(grid);
     } catch (e) {
-      grid.innerHTML = 'エラー: ' + e;
+      grid.innerHTML = 'Error: ' + e;
     }
   };
 
-  // Populate select
   try {
     const data = await fetchJSON('/api/videos');
-    candRoot.textContent = data.root;
     data.videos.forEach(name => {
       const opt = document.createElement('option');
       opt.value = name;
@@ -116,9 +115,8 @@ async function init() {
       targetSel.appendChild(opt);
     });
   } catch (e) {
-    candRoot.textContent = 'データフォルダが見つかりません';
+    // ignore
   }
 }
 
 window.addEventListener('DOMContentLoaded', init);
-

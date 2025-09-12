@@ -1,5 +1,8 @@
 import os
 import os.path as osp
+import logging
+import functools
+import inspect
 from typing import List, Tuple, Optional
 
 from fastapi import FastAPI, Request, HTTPException
@@ -16,19 +19,84 @@ from similarity_check.features import (
 from similarity_check.similarity import rank_similar
 
 
-VIDEO_ROOT = osp.abspath(os.environ.get("VIDEO_ROOT", "data"))
+# ------------------------------------------------------------------------------
+# Logging setup
+# ------------------------------------------------------------------------------
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+logger = logging.getLogger("similarity_check.web_api")
+if not logger.handlers:
+    # Basic configuration if the app doesn't configure logging itself
+    logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
+logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+
+
+def _shorten(value, maxlen: int = 200):
+    try:
+        s = str(value)
+    except Exception:
+        return "<unprintable>"
+    if len(s) > maxlen:
+        return s[: maxlen - 3] + "..."
+    return s
+
+
+def debug_log(func):
+    """Decorator to log function entry/exit and exceptions (sync/async)."""
+    if inspect.iscoroutinefunction(func):
+        @functools.wraps(func)
+        async def _awrap(*args, **kwargs):
+            logger.debug("ENTER %s args=%s kwargs=%s", func.__name__, _shorten(args), _shorten(kwargs))
+            try:
+                result = await func(*args, **kwargs)
+                logger.debug("EXIT  %s -> %s", func.__name__, _shorten(result))
+                return result
+            except Exception:
+                logger.exception("ERROR in %s", func.__name__)
+                raise
+        return _awrap
+    else:
+        @functools.wraps(func)
+        def _wrap(*args, **kwargs):
+            logger.debug("ENTER %s args=%s kwargs=%s", func.__name__, _shorten(args), _shorten(kwargs))
+            try:
+                result = func(*args, **kwargs)
+                logger.debug("EXIT  %s -> %s", func.__name__, _shorten(result))
+                return result
+            except Exception:
+                logger.exception("ERROR in %s", func.__name__)
+                raise
+        return _wrap
+
+
+BASE_DIR = osp.abspath(osp.join(osp.dirname(__file__), os.pardir))
+
+@debug_log
+def _resolve_root(env_name: str, default_rel: str) -> str:
+    # If env is set and absolute, use as-is. If relative or not set, resolve from BASE_DIR.
+    val = os.environ.get(env_name)
+    if val:
+        return val if osp.isabs(val) else osp.abspath(osp.join(BASE_DIR, val))
+    return osp.abspath(osp.join(BASE_DIR, default_rel))
+
+TARGET_ROOT = _resolve_root("TARGET_ROOT", "target")
+REFERENCE_ROOT = _resolve_root("REFERENCE_ROOT", "reference")
 STATIC_DIR = osp.join(osp.dirname(__file__), "static")
 TEMPLATE_DIR = osp.join(osp.dirname(__file__), "templates")
 
 app = FastAPI(title="Pose Similarity (YOLOv8-Pose) API")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-if osp.isdir(VIDEO_ROOT):
-    app.mount("/videos", StaticFiles(directory=VIDEO_ROOT), name="videos")
+if osp.isdir(TARGET_ROOT):
+    app.mount("/videos/target", StaticFiles(directory=TARGET_ROOT), name="videos_target")
+if osp.isdir(REFERENCE_ROOT):
+    app.mount("/videos/reference", StaticFiles(directory=REFERENCE_ROOT), name="videos_reference")
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
 
 _model = None
+logger.info("Configured TARGET_ROOT=%s", TARGET_ROOT)
+logger.info("Configured REFERENCE_ROOT=%s", REFERENCE_ROOT)
 
 
+@debug_log
 def _ensure_model():
     global _model
     if _model is None:
@@ -36,53 +104,84 @@ def _ensure_model():
     return _model
 
 
+@debug_log
 def _is_video(fname: str) -> bool:
     f = fname.lower()
     return f.endswith((".mp4", ".mov", ".avi", ".mkv", ".m4v"))
 
 
+@debug_log
 def _list_videos(root: str) -> List[str]:
     if not osp.isdir(root):
         return []
     return sorted([f for f in os.listdir(root) if _is_video(f)])
 
 
+@debug_log
 def _rel_url(path: str) -> str:
-    # Convert absolute/relative file path to /videos/<rel>
-    rel = osp.relpath(osp.abspath(path), VIDEO_ROOT)
-    rel = rel.replace("\\", "/")
-    return f"/videos/{rel}"
+    # Convert absolute/relative file path to a mounted static URL
+    ap = osp.abspath(path)
+    if osp.isdir(TARGET_ROOT) and osp.commonpath([ap, TARGET_ROOT]) == TARGET_ROOT:
+        rel = osp.relpath(ap, TARGET_ROOT).replace("\\", "/")
+        return f"/videos/target/{rel}"
+    if osp.isdir(REFERENCE_ROOT) and osp.commonpath([ap, REFERENCE_ROOT]) == REFERENCE_ROOT:
+        rel = osp.relpath(ap, REFERENCE_ROOT).replace("\\", "/")
+        return f"/videos/reference/{rel}"
+    # Fallback: try target mount
+    rel = osp.basename(ap)
+    return f"/videos/target/{rel}"
 
 
 @app.get("/", response_class=HTMLResponse)
+@debug_log
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "video_root": VIDEO_ROOT})
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "target_root": TARGET_ROOT,
+            "reference_root": REFERENCE_ROOT,
+            "video_root": TARGET_ROOT,
+        },
+    )
 
 
 @app.get("/api/videos")
+@debug_log
 async def list_videos():
-    items = _list_videos(VIDEO_ROOT)
-    return {"root": VIDEO_ROOT, "videos": items}
+    items = _list_videos(TARGET_ROOT)
+    return {"root": REFERENCE_ROOT, "target_root": TARGET_ROOT, "reference_root": REFERENCE_ROOT, "videos": items}
 
 
 @app.post("/api/search")
+@debug_log
 async def search(payload: dict):
     target = payload.get("target")
-    candidates_dir = payload.get("candidates_dir") or VIDEO_ROOT
+    candidates_dir = payload.get("candidates_dir")
+    device = payload.get("device", "cuda")
     topk = int(payload.get("topk", 5))
     frame_stride = int(payload.get("frame_stride", 5))
+
+    logger.debug("Search request: target=%s candidates_dir=%s device=%s topk=%s stride=%s",
+                 target, candidates_dir, device, topk, frame_stride)
 
     if not target:
         raise HTTPException(status_code=400, detail="target is required")
 
-    # Resolve paths relative to VIDEO_ROOT if not absolute
+    # Resolve target path relative to TARGET_ROOT if not absolute
     tgt_path = target
     if not osp.isabs(tgt_path):
-        tgt_path = osp.join(VIDEO_ROOT, tgt_path)
+        tgt_path = osp.join(TARGET_ROOT, tgt_path)
 
-    cand_dir = candidates_dir
-    if not osp.isabs(cand_dir):
-        cand_dir = osp.join(VIDEO_ROOT, cand_dir)
+    # Resolve candidates relative to CANDIDATE_ROOT if not provided/absolute
+    if not candidates_dir:
+        cand_dir = REFERENCE_ROOT
+    else:
+        cand_dir = candidates_dir
+        if not osp.isabs(cand_dir):
+            cand_dir = osp.join(REFERENCE_ROOT, cand_dir)
+
+    logger.debug("Resolved paths: tgt_path=%s cand_dir=%s", tgt_path, cand_dir)
 
     if not osp.isfile(tgt_path):
         raise HTTPException(status_code=404, detail=f"Target not found: {tgt_path}")
@@ -90,11 +189,17 @@ async def search(payload: dict):
         raise HTTPException(status_code=404, detail=f"Candidates not found: {cand_dir}")
 
     model = _ensure_model()
+    # Move model to requested device if possible; default GPU (cuda)
+    try:
+        model.to(device)
+    except Exception:
+        # Fallback: keep current device
+        pass
 
     # Target features (with cache)
     vec = load_feature_cache("features_cache", tgt_path)
     if vec is None:
-        info = extract_video_features(tgt_path, model, frame_stride=frame_stride)
+        info = extract_video_features(tgt_path, model, frame_stride=frame_stride, device=device)
         vec = info["vector"]
         save_feature_cache("features_cache", tgt_path, vec)
 
@@ -112,17 +217,20 @@ async def search(payload: dict):
         if osp.abspath(cand_dir) != osp.abspath(tgt_path):
             cand_paths.append((cand_dir, None))
 
+    logger.debug("Candidates discovered: %d", len(cand_paths))
+
     # Compute features for candidates
     cand_vecs: List[Tuple[str, object]] = []
     for p, _ in cand_paths:
         v = load_feature_cache("features_cache", p)
         if v is None:
-            info = extract_video_features(p, model, frame_stride=frame_stride)
+            info = extract_video_features(p, model, frame_stride=frame_stride, device=device)
             v = info["vector"]
             save_feature_cache("features_cache", p, v)
         cand_vecs.append((p, v))
 
     ranked = rank_similar(vec, cand_vecs)[:topk]
+    logger.debug("Ranking complete: returned=%d", len(ranked))
     results = [
         {"path": p, "name": osp.basename(p), "score": float(score), "url": _rel_url(p)}
         for (p, score) in ranked
@@ -137,4 +245,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("similarity_check.web_api:app", host="127.0.0.1", port=8000, reload=False)
-

@@ -1,5 +1,6 @@
 import os
 import os.path as osp
+import logging
 from typing import List, Tuple, Optional, Dict
 
 import cv2
@@ -10,6 +11,9 @@ try:
     from ultralytics import YOLO
 except Exception as e:  # pragma: no cover
     YOLO = None  # type: ignore
+
+
+logger = logging.getLogger("similarity_check.features")
 
 
 COCO_SKELETON = [
@@ -41,12 +45,19 @@ def _to_numpy(x):
         return None
 
 
-def load_model(model_name: str = "yolov8n-pose.pt"):
+def load_model(model_name: str = "yolov8n-pose.pt", device: Optional[str] = None):
     if YOLO is None:
         raise RuntimeError(
             "Ultralytics is not installed. Please `pip install ultralytics`."
         )
-    return YOLO(model_name)
+    model = YOLO(model_name)
+    if device:
+        try:
+            model.to(device)
+            logger.info("Loaded model on device=%s", device)
+        except Exception as ex:  # pragma: no cover
+            logger.warning("Failed to move model to device %s: %s", device, ex)
+    return model
 
 
 def _select_main_person(kpts_conf: np.ndarray) -> int:
@@ -101,6 +112,7 @@ def extract_video_features(
     frame_stride: int = 5,
     max_frames: Optional[int] = None,
     progress: bool = True,
+    device: Optional[str] = None,
 ) -> Dict[str, np.ndarray]:
     """
     Run pose estimation and build a video-level descriptor.
@@ -112,6 +124,14 @@ def extract_video_features(
 
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     used_features: List[np.ndarray] = []
+
+    # Try to move model to requested device
+    if device:
+        try:
+            model.to(device)
+            logger.debug("Using device=%s for %s", device, osp.basename(video_path))
+        except Exception as ex:  # pragma: no cover
+            logger.warning("Could not move model to %s: %s", device, ex)
 
     pbar = range(total)
     if progress:
