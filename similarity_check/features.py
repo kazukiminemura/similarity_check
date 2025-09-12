@@ -159,6 +159,8 @@ def extract_video_features(
     max_frames: Optional[int] = None,
     progress: bool = True,
     device: Optional[str] = None,
+    swing_only: bool = False,
+    swing_seconds: Optional[float] = 2.5,
 ) -> Dict[str, np.ndarray]:
     """
     Run pose estimation and build a video-level descriptor.
@@ -169,6 +171,7 @@ def extract_video_features(
         raise RuntimeError(f"Failed to open video: {video_path}")
 
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
     used_features: List[np.ndarray] = []
 
     # Prepare device param for OpenVINO backend
@@ -221,6 +224,26 @@ def extract_video_features(
                 "count": 0}
 
     per_frame = np.stack(used_features, axis=0)  # (T, 34)
+
+    # Optionally select a swing-only window by motion peak
+    if swing_only and per_frame.shape[0] > 4:
+        diffs = np.abs(np.diff(per_frame, axis=0))  # (T-1, 34)
+        energy = diffs.mean(axis=1)  # (T-1,)
+        peak = int(np.argmax(energy))  # center between frames peak and peak+1
+        if swing_seconds is None:
+            swing_seconds = 2.5
+        # samples_per_second under the given stride
+        samples_per_second = max(1.0, fps / max(1, frame_stride))
+        win = int(max(5, min(per_frame.shape[0], round(samples_per_second * swing_seconds))))
+        half = max(2, win // 2)
+        start = max(0, peak - half)
+        end = min(per_frame.shape[0], start + win)
+        start = max(0, end - win)  # ensure exact window length
+        logger.debug(
+            "Swing window: fps=%.2f stride=%d samples/s=%.2f win=%d idx=[%d:%d]",
+            fps, frame_stride, samples_per_second, end - start, start, end,
+        )
+        per_frame = per_frame[start:end]
     mean = per_frame.mean(axis=0)
     std = per_frame.std(axis=0)
     diffs = np.abs(np.diff(per_frame, axis=0))

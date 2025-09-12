@@ -161,6 +161,8 @@ async def search(payload: dict):
     device = payload.get("device", "GPU")
     topk = int(payload.get("topk", 5))
     frame_stride = int(payload.get("frame_stride", 5))
+    swing_only = bool(payload.get("swing_only", True))
+    swing_seconds = payload.get("swing_seconds", 2.5)
 
     logger.debug("Search request: target=%s candidates_dir=%s device=%s topk=%s stride=%s",
                  target, candidates_dir, device, topk, frame_stride)
@@ -190,12 +192,20 @@ async def search(payload: dict):
 
     model = _ensure_model()
 
-    # Target features (with cache)
-    vec = load_feature_cache("features_cache", tgt_path)
+    # Target features (with cache) - swing-only cache dir
+    cache_dir = "features_cache_swing" if swing_only else "features_cache"
+    vec = load_feature_cache(cache_dir, tgt_path)
     if vec is None:
-        info = extract_video_features(tgt_path, model, frame_stride=frame_stride, device=device)
+        info = extract_video_features(
+            tgt_path,
+            model,
+            frame_stride=frame_stride,
+            device=device,
+            swing_only=swing_only,
+            swing_seconds=swing_seconds,
+        )
         vec = info["vector"]
-        save_feature_cache("features_cache", tgt_path, vec)
+        save_feature_cache(cache_dir, tgt_path, vec)
 
     # Candidates
     cand_paths: List[Tuple[str, object]] = []
@@ -216,11 +226,18 @@ async def search(payload: dict):
     # Compute features for candidates
     cand_vecs: List[Tuple[str, object]] = []
     for p, _ in cand_paths:
-        v = load_feature_cache("features_cache", p)
+        v = load_feature_cache(cache_dir, p)
         if v is None:
-            info = extract_video_features(p, model, frame_stride=frame_stride, device=device)
+            info = extract_video_features(
+                p,
+                model,
+                frame_stride=frame_stride,
+                device=device,
+                swing_only=swing_only,
+                swing_seconds=swing_seconds,
+            )
             v = info["vector"]
-            save_feature_cache("features_cache", p, v)
+            save_feature_cache(cache_dir, p, v)
         cand_vecs.append((p, v))
 
     ranked = rank_similar(vec, cand_vecs)[:topk]
