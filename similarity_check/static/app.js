@@ -4,7 +4,7 @@ async function fetchJSON(url, opts) {
   return await res.json();
 }
 
-function createVideoCell(label, url, name, isMaster=false, startSec=null, endSec=null) {
+function createVideoCell(label, url, name, isMaster=false, startSec=null, endSec=null, debugLines=[]) {
   const cell = document.createElement('div');
   cell.className = 'cell';
   const lab = document.createElement('div');
@@ -34,6 +34,14 @@ function createVideoCell(label, url, name, isMaster=false, startSec=null, endSec
   });
   cell.appendChild(lab);
   cell.appendChild(vid);
+  if (debugLines && debugLines.length) {
+    const dbg = document.createElement('small');
+    dbg.style.display = 'block';
+    dbg.style.opacity = '0.8';
+    dbg.style.wordBreak = 'break-all';
+    dbg.textContent = debugLines.join(' | ');
+    cell.appendChild(dbg);
+  }
   return { cell, vid };
 }
 
@@ -107,7 +115,10 @@ async function init() {
       });
       grid.innerHTML = '';
       const firstUrl = res.target.clip_url || res.target.url;
-      const first = createVideoCell('Target', firstUrl, res.target.name, true, res.target.start, res.target.end);
+      const firstDbg = [];
+      if (res.target.path_abs) firstDbg.push('orig=' + res.target.path_abs);
+      if (res.target.clip_abs) firstDbg.push('clip=' + res.target.clip_abs);
+      const first = createVideoCell('Target', firstUrl, res.target.name, true, res.target.start, res.target.end, firstDbg);
       grid.appendChild(first.cell);
       for (let i = 0; i < 5; i++) {
         const item = res.results[i];
@@ -119,7 +130,10 @@ async function init() {
           continue;
         }
         const url = item.clip_url || item.url;
-        const { cell: c } = createVideoCell(`Top ${i+1}`, url, item.name, false, item.start, item.end);
+        const dbg = [];
+        if (item.path_abs) dbg.push('orig=' + item.path_abs);
+        if (item.clip_abs) dbg.push('clip=' + item.clip_abs);
+        const { cell: c } = createVideoCell(`Top ${i+1}`, url, item.name, false, item.start, item.end, dbg);
         grid.appendChild(c);
       }
       setUpSync(grid);

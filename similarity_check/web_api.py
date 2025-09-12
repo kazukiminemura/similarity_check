@@ -284,7 +284,13 @@ async def search(payload: dict):
         logger.debug("Ranking complete: returned=%d", len(ranked))
         results = []
         for (p, score) in ranked:
-            item = {"path": p, "name": osp.basename(p), "score": float(score), "url": _rel_url(p)}
+            item = {
+                "path": p,
+                "path_abs": osp.abspath(p),
+                "name": osp.basename(p),
+                "score": float(score),
+                "url": _rel_url(p),
+            }
             if swing_only:
                 # try read window meta from cache if available
                 try:
@@ -297,6 +303,7 @@ async def search(payload: dict):
                         clip_path = make_video_clip(p, float(ws), float(we), CLIP_DIR, basename=osp.splitext(osp.basename(p))[0])
                         if clip_path and osp.exists(clip_path):
                             item["clip_url"] = "/clips/" + osp.basename(clip_path)
+                            item["clip_abs"] = osp.abspath(clip_path)
                             # Use clip filename (with _clip suffix) as display name
                             item["name"] = osp.basename(clip_path)
                 except Exception:
@@ -307,16 +314,23 @@ async def search(payload: dict):
                 pre_clip = osp.join(CLIP_DIR, f"{base}_clip.mp4")
                 if osp.exists(pre_clip):
                     item["clip_url"] = "/clips/" + osp.basename(pre_clip)
+                    item["clip_abs"] = osp.abspath(pre_clip)
                     item["name"] = osp.basename(pre_clip)
             results.append(item)
 
-        target_entry = {"path": tgt_path, "name": osp.basename(tgt_path), "url": _rel_url(tgt_path)}
+        target_entry = {
+            "path": tgt_path,
+            "path_abs": osp.abspath(tgt_path),
+            "name": osp.basename(tgt_path),
+            "url": _rel_url(tgt_path),
+        }
         if swing_only and tgt_window:
             tws, twe = tgt_window
             target_entry["start"], target_entry["end"] = float(tws), float(twe)
             clip_path = make_video_clip(tgt_path, float(tws), float(twe), CLIP_DIR, basename=osp.splitext(osp.basename(tgt_path))[0])
             if clip_path and osp.exists(clip_path):
                 target_entry["clip_url"] = "/clips/" + osp.basename(clip_path)
+                target_entry["clip_abs"] = osp.abspath(clip_path)
                 # Use clip filename (with _clip suffix) as display name
                 target_entry["name"] = osp.basename(clip_path)
         # Fallback: use existing clip if present even when swing_only is false
@@ -325,6 +339,7 @@ async def search(payload: dict):
             pre_clip = osp.join(CLIP_DIR, f"{base}_clip.mp4")
             if osp.exists(pre_clip):
                 target_entry["clip_url"] = "/clips/" + osp.basename(pre_clip)
+                target_entry["clip_abs"] = osp.abspath(pre_clip)
                 target_entry["name"] = osp.basename(pre_clip)
 
         return {"used_device": dev, "target": target_entry, "results": results}
