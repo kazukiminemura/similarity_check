@@ -201,6 +201,16 @@ async def search(payload: dict):
     def _run_with_device(dev: str):
         # Target features (with cache) - swing-only cache dir
         cache_dir = "features_cache_swing" if swing_only else "features_cache"
+        # If recompute requested, remove any existing caches for the target
+        if recompute:
+            try:
+                for d in ("features_cache", "features_cache_swing"):
+                    base = osp.splitext(osp.basename(tgt_path))[0]
+                    cpath = osp.join(d, f"{base}.npz")
+                    if osp.exists(cpath):
+                        os.remove(cpath)
+            except Exception:
+                pass
         vec = None if recompute else load_feature_cache(cache_dir, tgt_path)
         tgt_window = None
         if vec is None:
@@ -235,6 +245,15 @@ async def search(payload: dict):
         cand_vecs: List[Tuple[str, object]] = []
         cand_windows = {}
         for p, _ in cand_paths:
+            if recompute:
+                try:
+                    for d in ("features_cache", "features_cache_swing"):
+                        base = osp.splitext(osp.basename(p))[0]
+                        cpath = osp.join(d, f"{base}.npz")
+                        if osp.exists(cpath):
+                            os.remove(cpath)
+                except Exception:
+                    pass
             v = None if recompute else load_feature_cache(cache_dir, p)
             if v is None:
                 info = extract_video_features(
