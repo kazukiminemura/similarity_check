@@ -238,6 +238,8 @@ def extract_video_features(
     per_frame = np.stack(used_features, axis=0)  # (T, 34)
 
     # Optionally select a swing-only window by motion peak
+    window_start_sec: Optional[float] = None
+    window_end_sec: Optional[float] = None
     if swing_only and per_frame.shape[0] > 4:
         diffs = np.abs(np.diff(per_frame, axis=0))  # (T-1, 34)
         energy = diffs.mean(axis=1)  # (T-1,)
@@ -255,13 +257,27 @@ def extract_video_features(
             "Swing window: fps=%.2f stride=%d samples/s=%.2f win=%d idx=[%d:%d]",
             fps, frame_stride, samples_per_second, end - start, start, end,
         )
+        # convert sample indices to seconds in original video timeline
+        window_start_sec = float(start * frame_stride) / float(max(1.0, fps))
+        window_end_sec = float(end * frame_stride) / float(max(1.0, fps))
         per_frame = per_frame[start:end]
     mean = per_frame.mean(axis=0)
     std = per_frame.std(axis=0)
     diffs = np.abs(np.diff(per_frame, axis=0))
     motion = diffs.mean(axis=0) if diffs.size else np.zeros_like(mean)
     vector = np.concatenate([mean, std, motion], axis=0).astype(np.float32)
-    return {"vector": vector, "per_frame": per_frame.astype(np.float32), "count": per_frame.shape[0]}
+    info: Dict[str, np.ndarray] = {
+        "vector": vector,
+        "per_frame": per_frame.astype(np.float32),
+        "count": per_frame.shape[0],
+    }
+    # attach window metadata (seconds) if available
+    if window_start_sec is not None and window_end_sec is not None:
+        info["window_start_sec"] = np.asarray(window_start_sec, dtype=np.float32)  # type: ignore
+        info["window_end_sec"] = np.asarray(window_end_sec, dtype=np.float32)  # type: ignore
+        info["fps"] = np.asarray(fps, dtype=np.float32)  # type: ignore
+        info["frame_stride"] = np.asarray(frame_stride, dtype=np.float32)  # type: ignore
+    return info
 
 
 def draw_pose_on_frame(frame: np.ndarray, kpts_xy: np.ndarray, conf: np.ndarray) -> np.ndarray:
@@ -313,11 +329,27 @@ def make_video_thumbnail_with_pose(
     return draw_pose_on_frame(frame, xy[idx], conf[idx])
 
 
-def save_feature_cache(cache_dir: str, video_path: str, vector: np.ndarray) -> str:
+def save_feature_cache(
+    cache_dir: str,
+    video_path: str,
+    vector: np.ndarray,
+    *,
+    window_start_sec: Optional[float] = None,
+    window_end_sec: Optional[float] = None,
+    frame_stride: Optional[int] = None,
+    fps: Optional[float] = None,
+) -> str:
     _ensure_dir(cache_dir)
     base = osp.splitext(osp.basename(video_path))[0]
     out = osp.join(cache_dir, f"{base}.npz")
-    np.savez_compressed(out, vector=vector)
+    np.savez_compressed(
+        out,
+        vector=vector,
+        window_start_sec=(window_start_sec if window_start_sec is not None else -1.0),
+        window_end_sec=(window_end_sec if window_end_sec is not None else -1.0),
+        frame_stride=(frame_stride if frame_stride is not None else -1),
+        fps=(fps if fps is not None else -1.0),
+    )
     return out
 
 
@@ -331,3 +363,32 @@ def load_feature_cache(cache_dir: str, video_path: str) -> Optional[np.ndarray]:
         return data["vector"]
     except Exception:
         return None
+
+
+def load_feature_meta(cache_dir: str, video_path: str) -> Dict[str, Optional[float]]:
+    base = osp.splitext(osp.basename(video_path))[0]
+    path = osp.join(cache_dir, f"{base}.npz")
+    meta: Dict[str, Optional[float]] = {
+        "window_start_sec": None,
+        "window_end_sec": None,
+        "frame_stride": None,  # type: ignore
+        "fps": None,
+    }
+    if not osp.exists(path):
+        return meta
+    try:
+        data = np.load(path)
+        ws = float(data.get("window_start_sec", -1.0))
+        we = float(data.get("window_end_sec", -1.0))
+        fs = int(data.get("frame_stride", -1))
+        fps = float(data.get("fps", -1.0))
+        if ws >= 0 and we >= 0 and we >= ws:
+            meta["window_start_sec"] = ws
+            meta["window_end_sec"] = we
+        if fs >= 0:
+            meta["frame_stride"] = float(fs)
+        if fps >= 0:
+            meta["fps"] = fps
+        return meta
+    except Exception:
+        return meta

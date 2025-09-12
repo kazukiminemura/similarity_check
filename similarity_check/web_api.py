@@ -197,6 +197,7 @@ async def search(payload: dict):
         # Target features (with cache) - swing-only cache dir
         cache_dir = "features_cache_swing" if swing_only else "features_cache"
         vec = load_feature_cache(cache_dir, tgt_path)
+        tgt_window = None
         if vec is None:
             info = extract_video_features(
                 tgt_path,
@@ -207,7 +208,7 @@ async def search(payload: dict):
                 swing_seconds=swing_seconds,
             )
             vec = info["vector"]
-            save_feature_cache(cache_dir, tgt_path, vec)
+            save_feature_cache(cache_dir, tgt_path, vec, window_start_sec=(float(info.get("window_start_sec", -1.0)) if isinstance(info, dict) else None), window_end_sec=(float(info.get("window_end_sec", -1.0)) if isinstance(info, dict) else None), frame_stride=frame_stride)
 
         # Candidates
         cand_paths: List[Tuple[str, object]] = []
@@ -227,6 +228,7 @@ async def search(payload: dict):
 
         # Compute features for candidates
         cand_vecs: List[Tuple[str, object]] = []
+        cand_windows = {}
         for p, _ in cand_paths:
             v = load_feature_cache(cache_dir, p)
             if v is None:
@@ -239,18 +241,29 @@ async def search(payload: dict):
                     swing_seconds=swing_seconds,
                 )
                 v = info["vector"]
-                save_feature_cache(cache_dir, p, v)
+                ws = float(info.get("window_start_sec", -1.0)) if isinstance(info, dict) else -1.0
+                we = float(info.get("window_end_sec", -1.0)) if isinstance(info, dict) else -1.0
+                save_feature_cache(cache_dir, p, v, window_start_sec=(ws if ws >= 0 else None), window_end_sec=(we if ws >= 0 else None), frame_stride=frame_stride)
+                if ws >= 0 and we >= 0:
+                    cand_windows[p] = (ws, we)
+            else:
+                from similarity_check.features import load_feature_meta as _lfm
+                meta = _lfm(cache_dir, p)
+                ws = meta.get("window_start_sec")
+                we = meta.get("window_end_sec")
+                if ws is not None and we is not None:
+                    cand_windows[p] = (ws, we)
             cand_vecs.append((p, v))
 
         ranked = rank_similar(vec, cand_vecs)[:topk]
         logger.debug("Ranking complete: returned=%d", len(ranked))
-        results = [
-            {"path": p, "name": osp.basename(p), "score": float(score), "url": _rel_url(p)}
-            for (p, score) in ranked
-        ]
+        results = []
+        for (p, score) in ranked:
+            item = {"path": p, "name": osp.basename(p), "score": float(score), "url": _rel_url(p)}
+            results.append(item)
         return {
             "used_device": dev,
-            "target": {"path": tgt_path, "name": osp.basename(tgt_path), "url": _rel_url(tgt_path)},
+            "target": {"path": tgt_path, "name": osp.basename(tgt_path), "url": _rel_url(tgt_path), **({"start": float(tgt_window[0]), "end": float(tgt_window[1])} if swing_only and tgt_window else {})},
             "results": results,
         }
 

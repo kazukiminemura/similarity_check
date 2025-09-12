@@ -4,7 +4,7 @@ async function fetchJSON(url, opts) {
   return await res.json();
 }
 
-function createVideoCell(label, url, name, isMaster=false) {
+function createVideoCell(label, url, name, isMaster=false, startSec=null, endSec=null) {
   const cell = document.createElement('div');
   cell.className = 'cell';
   const lab = document.createElement('div');
@@ -16,6 +16,22 @@ function createVideoCell(label, url, name, isMaster=false) {
   vid.preload = 'metadata';
   vid.playsInline = true;
   if (isMaster) vid.dataset.master = '1';
+  if (startSec != null) vid.dataset.clipStart = String(startSec);
+  if (endSec != null) vid.dataset.clipEnd = String(endSec);
+  vid.addEventListener('loadedmetadata', () => {
+    const s = parseFloat(vid.dataset.clipStart || 'NaN');
+    if (!Number.isNaN(s)) { try { vid.currentTime = s; } catch(_){} }
+  });
+  vid.addEventListener('timeupdate', () => {
+    const s = parseFloat(vid.dataset.clipStart || 'NaN');
+    const e = parseFloat(vid.dataset.clipEnd || 'NaN');
+    if (!Number.isNaN(s) && vid.currentTime < s - 0.05) {
+      try { vid.currentTime = s; } catch(_){}
+    }
+    if (!Number.isNaN(e) && vid.currentTime > e - 0.05) {
+      try { vid.pause(); vid.currentTime = e; } catch(_){}
+    }
+  });
   cell.appendChild(lab);
   cell.appendChild(vid);
   return { cell, vid };
@@ -90,7 +106,7 @@ async function init() {
         body: JSON.stringify({ target, device, topk, frame_stride, swing_only, swing_seconds }),
       });
       grid.innerHTML = '';
-      const first = createVideoCell('Target', res.target.url, res.target.name, true);
+      const first = createVideoCell('Target', res.target.url, res.target.name, true, res.target.start, res.target.end);
       grid.appendChild(first.cell);
       for (let i = 0; i < 5; i++) {
         const item = res.results[i];
@@ -101,7 +117,7 @@ async function init() {
           grid.appendChild(cell);
           continue;
         }
-        const { cell: c } = createVideoCell(`Top ${i+1}`, item.url, item.name);
+        const { cell: c } = createVideoCell(`Top ${i+1}`, item.url, item.name, false, item.start, item.end);
         grid.appendChild(c);
       }
       setUpSync(grid);
