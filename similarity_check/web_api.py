@@ -301,6 +301,13 @@ async def search(payload: dict):
                             item["name"] = osp.basename(clip_path)
                 except Exception:
                     pass
+            # Fallback: if a pre-generated clip exists in _clips, use it
+            if "clip_url" not in item:
+                base = osp.splitext(osp.basename(p))[0]
+                pre_clip = osp.join(CLIP_DIR, f"{base}_clip.mp4")
+                if osp.exists(pre_clip):
+                    item["clip_url"] = "/clips/" + osp.basename(pre_clip)
+                    item["name"] = osp.basename(pre_clip)
             results.append(item)
 
         target_entry = {"path": tgt_path, "name": osp.basename(tgt_path), "url": _rel_url(tgt_path)}
@@ -312,6 +319,13 @@ async def search(payload: dict):
                 target_entry["clip_url"] = "/clips/" + osp.basename(clip_path)
                 # Use clip filename (with _clip suffix) as display name
                 target_entry["name"] = osp.basename(clip_path)
+        # Fallback: use existing clip if present even when swing_only is false
+        if "clip_url" not in target_entry:
+            base = osp.splitext(osp.basename(tgt_path))[0]
+            pre_clip = osp.join(CLIP_DIR, f"{base}_clip.mp4")
+            if osp.exists(pre_clip):
+                target_entry["clip_url"] = "/clips/" + osp.basename(pre_clip)
+                target_entry["name"] = osp.basename(pre_clip)
 
         return {"used_device": dev, "target": target_entry, "results": results}
 
