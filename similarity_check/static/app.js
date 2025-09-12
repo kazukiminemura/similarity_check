@@ -79,7 +79,7 @@ async function init() {
     const target = targetSel.value;
     const topk = Number(topkEl.value || 5);
     const frame_stride = Number(strideEl.value || 5);
-    const device = (deviceSel?.value || 'gpu');
+    const device = (deviceSel?.value || 'auto');
     const swing_only = !!(swingOnlyEl?.checked);
     const swing_seconds = Number(swingSecsEl?.value || 2.5);
     grid.innerHTML = 'Searching...';

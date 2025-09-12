@@ -158,7 +158,7 @@ async def list_videos():
 async def search(payload: dict):
     target = payload.get("target")
     candidates_dir = payload.get("candidates_dir")
-    device = payload.get("device", "GPU")
+    device = payload.get("device", "AUTO")
     topk = int(payload.get("topk", 5))
     frame_stride = int(payload.get("frame_stride", 5))
     swing_only = bool(payload.get("swing_only", True))

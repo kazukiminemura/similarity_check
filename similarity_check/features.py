@@ -14,6 +14,7 @@ except Exception as e:  # pragma: no cover
 
 
 logger = logging.getLogger("similarity_check.features")
+BACKEND_OPENVINO: bool = False
 
 
 def _openvino_export_if_needed(model_name: str) -> Optional[str]:
@@ -61,6 +62,29 @@ def _map_device_to_ov(device: Optional[str]) -> Optional[str]:
     return device
 
 
+def _map_device_to_torch(device: Optional[str]) -> Optional[str]:
+    """Map frontend device to torch/ultralytics expected strings.
+    Returns 'cpu' or CUDA index string like '0'.
+    """
+    try:
+        import torch  # type: ignore
+        has_cuda = bool(torch.cuda.is_available())
+    except Exception:
+        has_cuda = False
+
+    if not device:
+        return '0' if has_cuda else 'cpu'
+    d = device.strip().lower()
+    if d in ("gpu", "cuda"):
+        return '0' if has_cuda else 'cpu'
+    if d in ("auto",):
+        return '0' if has_cuda else 'cpu'
+    if d in ("cpu",):
+        return 'cpu'
+    # passthrough for numeric devices
+    return d
+
+
 COCO_SKELETON = [
     (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
     (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16)
@@ -95,14 +119,26 @@ def load_model(model_name: str = "yolov8n-pose.pt", device: Optional[str] = None
         raise RuntimeError(
             "Ultralytics is not installed. Please `pip install ultralytics`."
         )
-    # Prefer OpenVINO engine
-    exported = _openvino_export_if_needed(model_name) or model_name
-    model = YOLO(exported)
-    ov_dev = _map_device_to_ov(device)
-    if ov_dev:
-        logger.info("Loaded model (OpenVINO) target device=%s", ov_dev)
-    else:
-        logger.info("Loaded model (OpenVINO) with default device")
+    global BACKEND_OPENVINO
+    exported = _openvino_export_if_needed(model_name)
+    if exported:
+        BACKEND_OPENVINO = True
+        model = YOLO(exported)
+        ov_dev = _map_device_to_ov(device)
+        if ov_dev:
+            logger.info("Loaded OpenVINO model, device=%s", ov_dev)
+        else:
+            logger.info("Loaded OpenVINO model with default device")
+        return model
+    # Fallback to PyTorch backend safely
+    BACKEND_OPENVINO = False
+    model = YOLO(model_name)
+    torch_dev = _map_device_to_torch(device)
+    try:
+        model.to(torch_dev)
+        logger.warning("OpenVINO unavailable; using torch backend on %s", torch_dev)
+    except Exception as ex:
+        logger.warning("Failed to move torch model to %s: %s (continuing)", torch_dev, ex)
     return model
 
 
@@ -174,8 +210,9 @@ def extract_video_features(
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
     used_features: List[np.ndarray] = []
 
-    # Prepare device param for OpenVINO backend
-    ov_dev = _map_device_to_ov(device)
+    # Prepare device param for backend
+    ov_dev = _map_device_to_ov(device) if BACKEND_OPENVINO else None
+    torch_dev = _map_device_to_torch(device) if not BACKEND_OPENVINO else None
 
     pbar = range(total)
     if progress:
@@ -193,7 +230,11 @@ def extract_video_features(
         frame_idx += 1
 
         # Run model
-        results = model(frame, verbose=False, device=ov_dev)
+        if BACKEND_OPENVINO:
+            results = model(frame, verbose=False, device=ov_dev)
+        else:
+            # For torch backend, device is controlled by model.to(); just call
+            results = model(frame, verbose=False)
         if not results:
             continue
         r0 = results[0]
@@ -280,8 +321,11 @@ def make_video_thumbnail_with_pose(
     cap.release()
     if not ret:
         return None
-    ov_dev = _map_device_to_ov(device)
-    results = model(frame, verbose=False, device=ov_dev)
+    if BACKEND_OPENVINO:
+        ov_dev = _map_device_to_ov(device)
+        results = model(frame, verbose=False, device=ov_dev)
+    else:
+        results = model(frame, verbose=False)
     if not results:
         return frame
     r0 = results[0]
