@@ -1,77 +1,90 @@
-# Video Similarity by Pose (YOLOv8-Pose)
+﻿# Video Similarity by Pose (YOLOv8‑Pose, OpenVINO)
 
-複数の動画から、対象動画にポーズ（骨格）が近い動画を探して表示するツールです。Ultralytics YOLOv8-Pose でキーポイントを抽出し、動画ごとの特徴量を作ってコサイン類似度でランキングします。
+Find videos whose pose is most similar to a target video. The app uses Ultralytics YOLOv8‑Pose to extract keypoints, builds a per‑video descriptor, and ranks candidates by cosine similarity.
 
-## いちばん簡単（Windows）
-- Streamlit のUIで使う（自動で仮想環境作成＆依存導入）
-  - `run_ui.bat` をダブルクリック
-  - ブラウザが開いたら、対象・候補のパスを入力して「検索実行」
-- コマンドラインで使う（自動で仮想環境作成＆依存導入）
-  - 例: `run_cli.bat data\front_target1.mp4 data 5 5`
+This project runs inference with OpenVINO only (no PyTorch/CUDA fallback). Device selection (GPU/CPU/AUTO) is exposed in the web UI and mapped to OpenVINO plugins.
 
-どちらも初回は YOLO の重み `yolov8n-pose.pt` を自動ダウンロードします（ネット接続が必要）。
+## Requirements
 
-## 手動セットアップ（任意）
-1. Python 3.9+（Windows可）を用意
-2. 依存をインストール
+- Python 3.9+
+- Install dependencies:
 
 ```bash
 pip install -r requirements.txt
-# UIも使う場合:
-pip install -r requirements-ui.txt
 ```
 
-## ルートから実行（Python）
-- リポジトリ直下でそのまま実行できます。
+Key packages: ultralytics, openvino, opencv‑python, numpy, scikit‑learn, tqdm, fastapi, uvicorn, jinja2.
+
+## Run the Web API
 
 ```bash
-python main.py --target path/to/target.mp4 --candidates path/to/video_dir --topk 5 --frame-stride 5
-```
-
-同等の実行（好みで選択）:
-- `python -m similarity_check.cli ...`
-- `python -m similarity_check ...`（パッケージ実行）
-
-## CLI（詳細）
-- 実行例:
-```bash
-python -m similarity_check.cli \
-  --target path/to/target.mp4 \
-  --candidates path/to/video_dir \
-  --topk 5 \
-  --frame-stride 5
-```
-- 出力:
-  - 類似度ランキングをコンソール表示
-  - `results_montage.jpg` に上位サムネイル（骨格オーバーレイ）
-  - `features_cache/*.npz` に特徴量キャッシュ
-
-## 対話式クイックスタート（もっと簡単）
-質問に答えるだけで実行します。
-
-```bash
-python -m similarity_check.quickstart
-```
-
-## Streamlit UI
-FastAPI版のWeb UI（推奨）
-```bash
-pip install -r requirements.txt
 python -m similarity_check.web_api
-# ブラウザで http://127.0.0.1:8000 を開く
+# then open http://127.0.0.1:8000
 ```
-動画ファイルは既定で `data/` を配信します（環境変数 `VIDEO_ROOT` で変更可）。
 
-## 仕組み（概要）
-- フレーム毎に最も信頼度の高い人物の17点キーポイントを取得
-- 位置・スケール不変になるよう正規化（重心平行移動＋スケーリング）
-- 動画特徴 = フレーム特徴の「平均」「標準偏差」「フレーム間差分の平均」を連結
-- コサイン類似度でランキング
+### Video Roots
 
-## トラブルシュート
-- モデルDL不可: ネット制限がある場合は `yolov8n-pose.pt` を手動DLして `--model` でパス指定
-- 動画が読めない: コーデック依存。`ffmpeg`等で mp4(H.264) に変換
-- 遅い: `--frame-stride` を上げる、`--max-frames` を下げる、可能ならGPUを使用
+- Target videos default to `<repo>/target`
+- Reference videos default to `<repo>/pro_data`
 
-## ライセンス
-データやモデルの利用規約は各自ご確認ください。ソースコードは本リポジトリに含まれるライセンスに準じます。
+Override via environment variables (relative paths resolve from the repo root):
+
+```bash
+# PowerShell
+$env:TARGET_ROOT = "C:\path\to\target"
+$env:REFERENCE_ROOT = "C:\path\to\reference"
+python -m similarity_check.web_api
+```
+
+The server mounts static video routes:
+- `/videos/target` → TARGET_ROOT
+- `/videos/reference` → REFERENCE_ROOT
+
+## Web UI
+
+Controls in the header:
+- Target video: dropdown populated from TARGET_ROOT
+- OpenVINO Device: GPU (Intel) / CPU / AUTO (default)
+- TopK: number of results to show
+- Frame stride: sample every N‑th frame
+- Swing only: focus evaluation on a short, motion‑peak window
+- Window (s): swing window length in seconds
+
+Results render the target and top‑K similar candidates, playable and time‑syncable.
+
+## API
+
+- GET `/api/videos`
+  - Returns: `{ target_root, reference_root, videos: [..] }`
+- POST `/api/search`
+  - Body (JSON):
+    - `target`: string (file name under TARGET_ROOT or absolute path)
+    - `device`: one of `gpu`, `cpu`, `auto` (mapped to OpenVINO `GPU`/`CPU`/`AUTO`)
+    - `topk`: int (default 5)
+    - `frame_stride`: int (default 5)
+    - `swing_only`: bool (default true)
+    - `swing_seconds`: number (default 2.5)
+  - Response: `{ used_device, target: {path,name,url}, results: [{path,name,score,url}, ...] }`
+
+### Feature Caching
+
+Descriptors are cached as `.npz` in:
+- `features_cache/` for full‑video
+- `features_cache_swing/` for swing‑only
+
+## How It Works
+
+For each sampled frame, the app selects the most confident person (17 keypoints), normalizes for translation/scale, and aggregates over time using mean, std, and mean absolute frame‑to‑frame motion to form the video vector. Similarity is cosine distance.
+
+Swing‑only mode detects a motion peak and centers a fixed‑length window (default ~2.5s, adjusted by FPS and stride).
+
+## Troubleshooting
+
+- “Invalid CUDA device …” when selecting GPU:
+  - The backend uses OpenVINO. Some environments may misinterpret a device string; the server defensively retries without a device argument or falls back to CPU for the request. Prefer `AUTO` if unsure.
+- OpenVINO export missing:
+  - On first run, Ultralytics exports `yolov8n-pose.pt` to an OpenVINO model directory next to the weights. Ensure `openvino` is installed and restart if needed.
+
+## License
+
+See the repository license for source code terms. Ensure you have rights to any video content you process.
