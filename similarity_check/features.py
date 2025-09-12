@@ -180,6 +180,7 @@ def extract_video_features(
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
     used_features: List[np.ndarray] = []
+    presence_scores: List[float] = []
 
     # Prepare device param (OpenVINO only)
     ov_dev = _map_device_to_ov(device)
@@ -223,6 +224,15 @@ def extract_video_features(
         if feat is None:
             continue
         used_features.append(feat)
+        # presence score: ratio of valid joints times their mean confidence
+        try:
+            cj = conf[n_idx]
+            valid_j = cj > 0
+            coverage = float(valid_j.mean()) if valid_j.size else 0.0
+            mean_c = float(cj[valid_j].mean()) if valid_j.any() else 0.0
+            presence_scores.append(max(0.0, min(1.0, coverage * mean_c)))
+        except Exception:
+            presence_scores.append(0.0)
         used += 1
         if max_frames is not None and used >= max_frames:
             break
@@ -243,16 +253,47 @@ def extract_video_features(
     if swing_only and per_frame.shape[0] > 4:
         diffs = np.abs(np.diff(per_frame, axis=0))  # (T-1, 34)
         energy = diffs.mean(axis=1)  # (T-1,)
-        peak = int(np.argmax(energy))  # center between frames peak and peak+1
+        # weight by presence/visibility of keypoints to reduce false peaks
+        try:
+            pres = np.asarray(presence_scores, dtype=np.float32)
+            pres = np.clip(pres, 0.0, 1.0)
+            w = np.minimum(pres[:-1], pres[1:])
+            energy = energy * (w + 1e-6)
+        except Exception:
+            pass
+        # smooth with moving average (~0.25s)
+        samples_per_second = max(1.0, fps / max(1, frame_stride))
+        k = max(3, int(round(samples_per_second * 0.25)))
+        if k % 2 == 0:
+            k += 1
+        if energy.shape[0] >= k:
+            kernel = np.ones(k, dtype=np.float32) / float(k)
+            energy_s = np.convolve(energy, kernel, mode='same')
+        else:
+            energy_s = energy
+        peak = int(np.argmax(energy_s))  # center between frames peak and peak+1
         if swing_seconds is None:
             swing_seconds = 2.5
-        # samples_per_second under the given stride
-        samples_per_second = max(1.0, fps / max(1, frame_stride))
+        # samples_per_second under the given stride (recomputed above)
         win = int(max(5, min(per_frame.shape[0], round(samples_per_second * swing_seconds))))
         half = max(2, win // 2)
         start = max(0, peak - half)
         end = min(per_frame.shape[0], start + win)
         start = max(0, end - win)  # ensure exact window length
+        # If presence is very low near peak, fallback to best-present segment
+        try:
+            if pres.size:
+                present_mask = pres > 0.25
+                # find longest contiguous run
+                if present_mask.any() and (w if 'w' in locals() else pres[:-1]).max() < 0.05:
+                    # fallback center of present region
+                    idxs = np.where(present_mask)[0]
+                    center = int(idxs.mean())
+                    start = max(0, center - half)
+                    end = min(per_frame.shape[0], start + win)
+                    start = max(0, end - win)
+        except Exception:
+            pass
         logger.debug(
             "Swing window: fps=%.2f stride=%d samples/s=%.2f win=%d idx=[%d:%d]",
             fps, frame_stride, samples_per_second, end - start, start, end,
