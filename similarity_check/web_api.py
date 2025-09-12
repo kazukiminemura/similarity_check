@@ -158,7 +158,7 @@ async def list_videos():
 async def search(payload: dict):
     target = payload.get("target")
     candidates_dir = payload.get("candidates_dir")
-    device = payload.get("device", "cuda")
+    device = payload.get("device", "GPU")
     topk = int(payload.get("topk", 5))
     frame_stride = int(payload.get("frame_stride", 5))
 
@@ -189,12 +189,6 @@ async def search(payload: dict):
         raise HTTPException(status_code=404, detail=f"Candidates not found: {cand_dir}")
 
     model = _ensure_model()
-    # Move model to requested device if possible; default GPU (cuda)
-    try:
-        model.to(device)
-    except Exception:
-        # Fallback: keep current device
-        pass
 
     # Target features (with cache)
     vec = load_feature_cache("features_cache", tgt_path)

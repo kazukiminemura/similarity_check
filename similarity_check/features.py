@@ -16,6 +16,51 @@ except Exception as e:  # pragma: no cover
 logger = logging.getLogger("similarity_check.features")
 
 
+def _openvino_export_if_needed(model_name: str) -> Optional[str]:
+    """
+    Ensure an OpenVINO model exists for the given Ultralytics model.
+    Returns the path to the exported OpenVINO model directory, or None on failure.
+    """
+    if YOLO is None:
+        return None
+    # If user already passes an OpenVINO dir or xml path, just return its dir
+    if model_name.endswith(".xml") and osp.exists(model_name):
+        return osp.dirname(model_name)
+    if model_name.endswith("_openvino_model") and osp.isdir(model_name):
+        return model_name
+    # Otherwise assume a .pt and export target dir next to it
+    base, ext = osp.splitext(model_name)
+    if ext.lower() == ".pt":
+        exported_dir = base + "_openvino_model"
+        if osp.isdir(exported_dir):
+            return exported_dir
+        try:
+            logger.info("Exporting Ultralytics model to OpenVINO: %s", model_name)
+            YOLO(model_name).export(format="openvino")
+            if osp.isdir(exported_dir):
+                return exported_dir
+        except Exception as ex:  # pragma: no cover
+            logger.warning("OpenVINO export failed for %s: %s", model_name, ex)
+    # Fallback: if it's a directory already, try as-is
+    if osp.isdir(model_name):
+        return model_name
+    return None
+
+
+def _map_device_to_ov(device: Optional[str]) -> Optional[str]:
+    if not device:
+        return None
+    d = device.strip().lower()
+    if d in ("cuda", "gpu"):
+        return "GPU"
+    if d in ("cpu",):
+        return "CPU"
+    if d in ("auto",):
+        return "AUTO"
+    # passthrough for already-OV device strings
+    return device
+
+
 COCO_SKELETON = [
     (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
     (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16)
@@ -50,13 +95,14 @@ def load_model(model_name: str = "yolov8n-pose.pt", device: Optional[str] = None
         raise RuntimeError(
             "Ultralytics is not installed. Please `pip install ultralytics`."
         )
-    model = YOLO(model_name)
-    if device:
-        try:
-            model.to(device)
-            logger.info("Loaded model on device=%s", device)
-        except Exception as ex:  # pragma: no cover
-            logger.warning("Failed to move model to device %s: %s", device, ex)
+    # Prefer OpenVINO engine
+    exported = _openvino_export_if_needed(model_name) or model_name
+    model = YOLO(exported)
+    ov_dev = _map_device_to_ov(device)
+    if ov_dev:
+        logger.info("Loaded model (OpenVINO) target device=%s", ov_dev)
+    else:
+        logger.info("Loaded model (OpenVINO) with default device")
     return model
 
 
@@ -125,13 +171,8 @@ def extract_video_features(
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     used_features: List[np.ndarray] = []
 
-    # Try to move model to requested device
-    if device:
-        try:
-            model.to(device)
-            logger.debug("Using device=%s for %s", device, osp.basename(video_path))
-        except Exception as ex:  # pragma: no cover
-            logger.warning("Could not move model to %s: %s", device, ex)
+    # Prepare device param for OpenVINO backend
+    ov_dev = _map_device_to_ov(device)
 
     pbar = range(total)
     if progress:
@@ -149,7 +190,7 @@ def extract_video_features(
         frame_idx += 1
 
         # Run model
-        results = model(frame, verbose=False)
+        results = model(frame, verbose=False, device=ov_dev)
         if not results:
             continue
         r0 = results[0]
@@ -204,7 +245,7 @@ def draw_pose_on_frame(frame: np.ndarray, kpts_xy: np.ndarray, conf: np.ndarray)
 
 
 def make_video_thumbnail_with_pose(
-    video_path: str, model, frame_index: int = 0
+    video_path: str, model, frame_index: int = 0, device: Optional[str] = None
 ) -> Optional[np.ndarray]:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -216,7 +257,8 @@ def make_video_thumbnail_with_pose(
     cap.release()
     if not ret:
         return None
-    results = model(frame, verbose=False)
+    ov_dev = _map_device_to_ov(device)
+    results = model(frame, verbose=False, device=ov_dev)
     if not results:
         return frame
     r0 = results[0]
