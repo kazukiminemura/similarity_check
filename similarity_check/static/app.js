@@ -115,10 +115,19 @@ async function init() {
       });
       grid.innerHTML = '';
       const firstUrl = res.target.clip_url || res.target.url;
+      const useClipForTarget = !!res.target.clip_url;
       const firstDbg = [];
       if (res.target.path_abs) firstDbg.push('orig=' + res.target.path_abs);
       if (res.target.clip_abs) firstDbg.push('clip=' + res.target.clip_abs);
-      const first = createVideoCell('Target', firstUrl, res.target.name, true, res.target.start, res.target.end, firstDbg);
+      const first = createVideoCell(
+        'Target',
+        firstUrl,
+        res.target.name,
+        true,
+        useClipForTarget ? null : res.target.start,
+        useClipForTarget ? null : res.target.end,
+        firstDbg
+      );
       grid.appendChild(first.cell);
       for (let i = 0; i < 5; i++) {
         const item = res.results[i];
@@ -130,10 +139,19 @@ async function init() {
           continue;
         }
         const url = item.clip_url || item.url;
+        const useClip = !!item.clip_url;
         const dbg = [];
         if (item.path_abs) dbg.push('orig=' + item.path_abs);
         if (item.clip_abs) dbg.push('clip=' + item.clip_abs);
-        const { cell: c } = createVideoCell(`Top ${i+1}`, url, item.name, false, item.start, item.end, dbg);
+        const { cell: c } = createVideoCell(
+          `Top ${i+1}`,
+          url,
+          item.name,
+          false,
+          useClip ? null : item.start,
+          useClip ? null : item.end,
+          dbg
+        );
         grid.appendChild(c);
       }
       setUpSync(grid);
@@ -161,7 +179,15 @@ async function init() {
         });
         grid.innerHTML = '';
         const firstUrl = res.target.clip_url || res.target.url;
-        const first = createVideoCell('Target', firstUrl, res.target.name, true, res.target.start, res.target.end);
+        const useClipForTarget = !!res.target.clip_url;
+        const first = createVideoCell(
+          'Target',
+          firstUrl,
+          res.target.name,
+          true,
+          useClipForTarget ? null : res.target.start,
+          useClipForTarget ? null : res.target.end
+        );
         grid.appendChild(first.cell);
         for (let i = 0; i < 5; i++) {
           const item = res.results[i];
@@ -173,7 +199,15 @@ async function init() {
             continue;
           }
           const url = item.clip_url || item.url;
-          const { cell: c } = createVideoCell(`Top ${i+1}`, url, item.name, false, item.start, item.end);
+          const useClip = !!item.clip_url;
+          const { cell: c } = createVideoCell(
+            `Top ${i+1}`,
+            url,
+            item.name,
+            false,
+            useClip ? null : item.start,
+            useClip ? null : item.end
+          );
           grid.appendChild(c);
         }
         setUpSync(grid);
