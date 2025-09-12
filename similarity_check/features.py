@@ -231,7 +231,12 @@ def extract_video_features(
 
         # Run model
         if BACKEND_OPENVINO:
-            results = model(frame, verbose=False, device=ov_dev)
+            try:
+                results = model(frame, verbose=False, device=ov_dev)
+            except Exception as ex:  # pragma: no cover
+                # Some environments mis-route device arg to CUDA selector; retry without
+                logger.warning("OpenVINO call with device=%s failed: %s; retrying without device", ov_dev, ex)
+                results = model(frame, verbose=False)
         else:
             # For torch backend, device is controlled by model.to(); just call
             results = model(frame, verbose=False)
@@ -323,7 +328,11 @@ def make_video_thumbnail_with_pose(
         return None
     if BACKEND_OPENVINO:
         ov_dev = _map_device_to_ov(device)
-        results = model(frame, verbose=False, device=ov_dev)
+        try:
+            results = model(frame, verbose=False, device=ov_dev)
+        except Exception as ex:  # pragma: no cover
+            logger.warning("OpenVINO thumbnail call with device=%s failed: %s; retrying without device", ov_dev, ex)
+            results = model(frame, verbose=False)
     else:
         results = model(frame, verbose=False)
     if not results:
