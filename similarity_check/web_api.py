@@ -167,7 +167,7 @@ async def search(payload: dict):
     topk = int(payload.get("topk", 5))
     frame_stride = int(payload.get("frame_stride", 5))
     swing_only = bool(payload.get("swing_only", True))
-    swing_seconds = payload.get("swing_seconds", 2.5)
+    swing_seconds = payload.get("swing_seconds", 2.5)\n    recompute = bool(payload.get("recompute", False))
 
     logger.debug("Search request: target=%s candidates_dir=%s device=%s topk=%s stride=%s",
                  target, candidates_dir, device, topk, frame_stride)
@@ -201,7 +201,7 @@ async def search(payload: dict):
     def _run_with_device(dev: str):
         # Target features (with cache) - swing-only cache dir
         cache_dir = "features_cache_swing" if swing_only else "features_cache"
-        vec = load_feature_cache(cache_dir, tgt_path)
+        vec = None if recompute else load_feature_cache(cache_dir, tgt_path)
         tgt_window = None
         if vec is None:
             info = extract_video_features(
@@ -235,7 +235,7 @@ async def search(payload: dict):
         cand_vecs: List[Tuple[str, object]] = []
         cand_windows = {}
         for p, _ in cand_paths:
-            v = load_feature_cache(cache_dir, p)
+            v = None if recompute else load_feature_cache(cache_dir, p)
             if v is None:
                 info = extract_video_features(
                     p,

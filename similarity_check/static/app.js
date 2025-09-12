@@ -128,6 +128,47 @@ async function init() {
     }
   };
 
+  // Force recompute (ignore caches)
+  const recomputeBtn = document.getElementById('recompute-btn');
+  if (recomputeBtn) {
+    recomputeBtn.onclick = async () => {
+      const target = targetSel.value;
+      const topk = Number(topkEl.value || 5);
+      const frame_stride = Number(strideEl.value || 5);
+      const device = (deviceSel?.value || 'auto');
+      const swing_only = !!(swingOnlyEl?.checked);
+      const swing_seconds = Number(swingSecsEl?.value || 2.5);
+      grid.innerHTML = 'Recomputing...';
+      try {
+        const res = await fetchJSON('/api/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target, device, topk, frame_stride, swing_only, swing_seconds, recompute: true }),
+        });
+        grid.innerHTML = '';
+        const firstUrl = res.target.clip_url || res.target.url;
+        const first = createVideoCell('Target', firstUrl, res.target.name, true, res.target.start, res.target.end);
+        grid.appendChild(first.cell);
+        for (let i = 0; i < 5; i++) {
+          const item = res.results[i];
+          const cell = document.createElement('div');
+          cell.className = 'cell';
+          if (!item) {
+            cell.innerHTML = '<div class="label">(empty)</div>';
+            grid.appendChild(cell);
+            continue;
+          }
+          const url = item.clip_url || item.url;
+          const { cell: c } = createVideoCell(`Top ${i+1}`, url, item.name, false, item.start, item.end);
+          grid.appendChild(c);
+        }
+        setUpSync(grid);
+      } catch (e) {
+        grid.innerHTML = 'Error: ' + e;
+      }
+    };
+  }
+
   try {
     const data = await fetchJSON('/api/videos');
     data.videos.forEach(name => {
