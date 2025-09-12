@@ -161,6 +161,8 @@ def make_sync_grid_video(
     return out_path
 import os
 import os.path as osp
+import shutil
+import subprocess
 from typing import Optional
 
 import cv2
@@ -169,6 +171,28 @@ import cv2
 def ensure_dir(path: str) -> None:
     if path and not osp.isdir(path):
         os.makedirs(path, exist_ok=True)
+
+
+def _ffmpeg_available() -> bool:
+    return shutil.which("ffmpeg") is not None
+
+
+def _make_clip_ffmpeg(src_path: str, start_sec: float, end_sec: float, out_path: str) -> bool:
+    try:
+        # Fast path: stream copy with moov relocation for web playback
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", f"{max(0.0, start_sec):.3f}",
+            "-to", f"{max(0.0, end_sec):.3f}",
+            "-i", src_path,
+            "-c", "copy",
+            "-movflags", "+faststart",
+            out_path,
+        ]
+        completed = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return completed.returncode == 0 and osp.exists(out_path) and osp.getsize(out_path) > 0
+    except Exception:
+        return False
 
 
 def make_video_clip(src_path: str, start_sec: float, end_sec: float, out_dir: str, basename: Optional[str] = None) -> Optional[str]:
@@ -205,7 +229,18 @@ def make_video_clip(src_path: str, start_sec: float, end_sec: float, out_dir: st
             cap.release()
             return out_path
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # widely compatible; requires codecs
+        # Prefer ffmpeg if present for H.264 copy without re-encode
+        ensure_dir(out_dir)
+        base = basename or osp.splitext(osp.basename(src_path))[0]
+        name = f"{base}_clip_{start_f}_{end_f}.mp4"
+        out_path = osp.join(out_dir, name)
+
+        if _ffmpeg_available():
+            if _make_clip_ffmpeg(src_path, start_sec, end_sec, out_path):
+                cap.release()
+                return out_path
+
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # fallback
         writer = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
 
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
@@ -230,4 +265,3 @@ def make_video_clip(src_path: str, start_sec: float, end_sec: float, out_dir: st
         return out_path
     except Exception:
         return None
-

@@ -80,7 +80,7 @@ def _resolve_root(env_name: str, default_rel: str) -> str:
     return osp.abspath(osp.join(BASE_DIR, default_rel))
 
 TARGET_ROOT = _resolve_root("TARGET_ROOT", "target")
-REFERENCE_ROOT = _resolve_root("REFERENCE_ROOT", "pro_data")
+REFERENCE_ROOT = _resolve_root("REFERENCE_ROOT", "reference")
 STATIC_DIR = osp.join(osp.dirname(__file__), "static")
 TEMPLATE_DIR = osp.join(osp.dirname(__file__), "templates")
 CLIP_DIR = osp.join(osp.dirname(__file__), "_clips")
