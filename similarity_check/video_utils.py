@@ -221,7 +221,8 @@ def make_video_clip(src_path: str, start_sec: float, end_sec: float, out_dir: st
         # Prepare writer
         ensure_dir(out_dir)
         base = basename or osp.splitext(osp.basename(src_path))[0]
-        name = f"{base}_clip_{start_f}_{end_f}.mp4"
+        # Use a stable, simple name so the frontend can reference it easily
+        name = f"{base}_clip.mp4"
         out_path = osp.join(out_dir, name)
 
         # If clip already exists, return it
