@@ -96,18 +96,22 @@ async function init() {
   const topkEl = document.getElementById('topk');
   const strideEl = document.getElementById('stride');
   const deviceSel = document.getElementById('device-select');
+  const swingOnlyEl = document.getElementById('swing-only');
+  const swingSecsEl = document.getElementById('swing-seconds');
 
   document.getElementById('search-btn').onclick = async () => {
     const target = targetSel.value;
     const topk = Number(topkEl.value || 5);
     const frame_stride = Number(strideEl.value || 5);
     const device = (deviceSel?.value || 'auto');
+    const swing_only = !!(swingOnlyEl?.checked);
+    const swing_seconds = Number(swingSecsEl?.value || 2.5);
     grid.innerHTML = 'Searching...';
     try {
-      const res = await fetchJSON('/api/search_clips', {
+      const res = await fetchJSON('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target, device, topk, frame_stride }),
+        body: JSON.stringify({ target, device, topk, frame_stride, swing_only, swing_seconds }),
       });
       grid.innerHTML = '';
       const first = createVideoCell('Target', res.target, true);
@@ -140,12 +144,14 @@ async function init() {
         const topk = Number(topkEl.value || 5);
         const frame_stride = Number(strideEl.value || 5);
         const device = (deviceSel?.value || 'auto');
+        const swing_only = !!(swingOnlyEl?.checked);
+        const swing_seconds = Number(swingSecsEl?.value || 2.5);
         grid.innerHTML = 'Recomputing...';
         try {
-          const res = await fetchJSON('/api/search_clips', {
+          const res = await fetchJSON('/api/search', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target, device, topk, frame_stride, recompute: true }),
+            body: JSON.stringify({ target, device, topk, frame_stride, swing_only, swing_seconds, recompute: true }),
           });
           grid.innerHTML = '';
           const first = createVideoCell('Target', res.target, true);
@@ -171,8 +177,8 @@ async function init() {
   }
 
   try {
-    const data = await fetchJSON('/api/clips');
-    data.clips.forEach(name => {
+    const data = await fetchJSON('/api/videos');
+    data.videos.forEach(name => {
       const opt = document.createElement('option');
       opt.value = name;
       opt.textContent = name;

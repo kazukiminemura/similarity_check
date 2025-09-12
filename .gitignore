@@ -5,3 +5,6 @@ results_montage.jpg
 .DS_Store
 yolov8n-pose_openvino_model/
 features_cache_swing/
+features_cache_clips/
+similarity_check/_clips/
+similarity_check/static/*.tmp
