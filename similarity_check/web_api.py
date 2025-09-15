@@ -3,6 +3,7 @@ import os.path as osp
 import logging
 import functools
 import inspect
+import glob
 from typing import List, Tuple, Optional
 
 from fastapi import FastAPI, Request, HTTPException
@@ -311,8 +312,10 @@ async def search(payload: dict):
             # Fallback: if a pre-generated clip exists in _clips, use it
             if "clip_url" not in item:
                 base = osp.splitext(osp.basename(p))[0]
-                pre_clip = osp.join(CLIP_DIR, f"{base}_clip.mp4")
-                if osp.exists(pre_clip):
+                pattern = osp.join(CLIP_DIR, f"{base}_clip*.mp4")
+                matches = sorted(glob.glob(pattern))
+                if matches:
+                    pre_clip = matches[0]
                     item["clip_url"] = "/clips/" + osp.basename(pre_clip)
                     item["clip_abs"] = osp.abspath(pre_clip)
                     item["name"] = osp.basename(pre_clip)
@@ -336,8 +339,10 @@ async def search(payload: dict):
         # Fallback: use existing clip if present even when swing_only is false
         if "clip_url" not in target_entry:
             base = osp.splitext(osp.basename(tgt_path))[0]
-            pre_clip = osp.join(CLIP_DIR, f"{base}_clip.mp4")
-            if osp.exists(pre_clip):
+            pattern = osp.join(CLIP_DIR, f"{base}_clip*.mp4")
+            matches = sorted(glob.glob(pattern))
+            if matches:
+                pre_clip = matches[0]
                 target_entry["clip_url"] = "/clips/" + osp.basename(pre_clip)
                 target_entry["clip_abs"] = osp.abspath(pre_clip)
                 target_entry["name"] = osp.basename(pre_clip)
