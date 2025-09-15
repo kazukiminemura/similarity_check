@@ -84,7 +84,7 @@ TARGET_ROOT = _resolve_root("TARGET_ROOT", "target")
 REFERENCE_ROOT = _resolve_root("REFERENCE_ROOT", "reference")
 STATIC_DIR = osp.join(osp.dirname(__file__), "static")
 TEMPLATE_DIR = osp.join(osp.dirname(__file__), "templates")
-CLIP_DIR = osp.join(osp.dirname(__file__), "_clips")
+CLIP_DIR = _resolve_root("CLIP_DIR", "similarity_check_clips")
 
 app = FastAPI(title="Pose Similarity (YOLOv8-Pose) API")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -100,6 +100,7 @@ templates = Jinja2Templates(directory=TEMPLATE_DIR)
 _model = None
 logger.info("Configured TARGET_ROOT=%s", TARGET_ROOT)
 logger.info("Configured REFERENCE_ROOT=%s", REFERENCE_ROOT)
+logger.info("Configured CLIP_DIR=%s", CLIP_DIR)
 
 
 @debug_log
@@ -309,7 +310,7 @@ async def search(payload: dict):
                             item["name"] = osp.basename(clip_path)
                 except Exception:
                     pass
-            # Fallback: if a pre-generated clip exists in _clips, use it
+            # Fallback: if a pre-generated clip exists in the clip directory, use it
             if "clip_url" not in item:
                 base = osp.splitext(osp.basename(p))[0]
                 pattern = osp.join(CLIP_DIR, f"{base}_clip*.mp4")
