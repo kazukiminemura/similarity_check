@@ -9,7 +9,8 @@ function createVideoCell(label, item, isMaster=false) {
   cell.className = 'cell';
   const lab = document.createElement('div');
   lab.className = 'label';
-  lab.textContent = `${label}: ${item.name || ''}`;
+  const displayName = item?.display_name || item?.name || '';
+  lab.textContent = `${label}: ${displayName}`;
 
   const url = item.clip_url || item.url; // play from /clips when available
   const useClip = !!item.clip_url;
@@ -99,91 +100,106 @@ async function init() {
   const swingOnlyEl = document.getElementById('swing-only');
   const swingSecsEl = document.getElementById('swing-seconds');
 
-  document.getElementById('search-btn').onclick = async () => {
+  const renderResults = (res) => {
+    grid.innerHTML = '';
+    if (!res) {
+      grid.innerHTML = '(no results)';
+      return;
+    }
+
+    const clipPool = Array.isArray(res.clip_pool) ? res.clip_pool.slice() : [];
+    const takeClip = () => (clipPool.length ? clipPool.shift() : null);
+    const slotRaw = Number(topkEl.value || 5);
+    const slotCount = Number.isFinite(slotRaw) && slotRaw > 0 ? slotRaw : 5;
+
+    if (res.target) {
+      const targetCell = createVideoCell('Target', res.target, true);
+      grid.appendChild(targetCell.cell);
+    } else {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.innerHTML = '<div class="label">(no target)</div>';
+      grid.appendChild(cell);
+    }
+
+    for (let i = 0; i < slotCount; i++) {
+      let item = Array.isArray(res.results) ? res.results[i] : null;
+      if (!item) {
+        item = takeClip();
+      } else if (!item.clip_url) {
+        const fallback = takeClip();
+        if (fallback) {
+          item = {
+            ...item,
+            clip_url: fallback.clip_url || fallback.url,
+            clip_abs: fallback.clip_abs,
+            clip_path: fallback.clip_path || fallback.path,
+            clip_name: fallback.clip_name || fallback.name,
+            display_name: fallback.display_name || item.display_name || item.name,
+          };
+        }
+      }
+      if (!item) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.innerHTML = '<div class="label">(empty)</div>';
+        grid.appendChild(cell);
+        continue;
+      }
+      const { cell: c } = createVideoCell(`Top ${i + 1}`, item, false);
+      grid.appendChild(c);
+    }
+
+    setUpSync(grid);
+  };
+
+  const runSearch = async (overrides = {}) => {
     const target = targetSel.value;
     const topk = Number(topkEl.value || 5);
     const frame_stride = Number(strideEl.value || 5);
     const device = (deviceSel?.value || 'auto');
     const swing_only = !!(swingOnlyEl?.checked);
     const swing_seconds = Number(swingSecsEl?.value || 2.5);
-    grid.innerHTML = 'Searching...';
+    grid.innerHTML = overrides.recompute ? 'Recomputing...' : 'Searching...';
     try {
       const res = await fetchJSON('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target, device, topk, frame_stride, swing_only, swing_seconds }),
+        body: JSON.stringify({ target, device, topk, frame_stride, swing_only, swing_seconds, ...overrides }),
       });
-      grid.innerHTML = '';
-      const first = createVideoCell('Target', res.target, true);
-      grid.appendChild(first.cell);
-      for (let i = 0; i < 5; i++) {
-        const item = res.results[i];
-        const cell = document.createElement('div');
-        cell.className = 'cell';
-        if (!item) {
-          cell.innerHTML = '<div class="label">(empty)</div>';
-          grid.appendChild(cell);
-          continue;
-        }
-        const { cell: c } = createVideoCell(`Top ${i+1}`, item, false);
-        grid.appendChild(c);
-      }
-      setUpSync(grid);
+      renderResults(res);
     } catch (e) {
       grid.innerHTML = 'Error: ' + e;
     }
   };
 
-  // Force recompute (ignore caches)
+  document.getElementById('search-btn').onclick = () => { runSearch(); };
+
   const recomputeBtn = document.getElementById('recompute-btn');
   if (recomputeBtn) {
-    recomputeBtn.onclick = () => {
-      document.getElementById('search-btn').onclick = null; // avoid double bind
-      (async () => {
-        const target = targetSel.value;
-        const topk = Number(topkEl.value || 5);
-        const frame_stride = Number(strideEl.value || 5);
-        const device = (deviceSel?.value || 'auto');
-        const swing_only = !!(swingOnlyEl?.checked);
-        const swing_seconds = Number(swingSecsEl?.value || 2.5);
-        grid.innerHTML = 'Recomputing...';
-        try {
-          const res = await fetchJSON('/api/search', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target, device, topk, frame_stride, swing_only, swing_seconds, recompute: true }),
-          });
-          grid.innerHTML = '';
-          const first = createVideoCell('Target', res.target, true);
-          grid.appendChild(first.cell);
-          for (let i = 0; i < 5; i++) {
-            const item = res.results[i];
-            const cell = document.createElement('div');
-            cell.className = 'cell';
-            if (!item) {
-              cell.innerHTML = '<div class="label">(empty)</div>';
-              grid.appendChild(cell);
-              continue;
-            }
-            const { cell: c } = createVideoCell(`Top ${i+1}`, item, false);
-            grid.appendChild(c);
-          }
-          setUpSync(grid);
-        } catch (e) {
-          grid.innerHTML = 'Error: ' + e;
-        }
-      })();
-    };
+    recomputeBtn.onclick = () => { runSearch({ recompute: true }); };
   }
 
   try {
     const data = await fetchJSON('/api/videos');
-    data.videos.forEach(name => {
+    targetSel.innerHTML = '';
+    const videos = Array.isArray(data?.videos) ? data.videos : [];
+    videos.forEach(entry => {
       const opt = document.createElement('option');
-      opt.value = name;
-      opt.textContent = name;
+      if (entry && typeof entry === 'object') {
+        const name = entry.name ?? entry.path ?? '';
+        opt.value = name;
+        opt.textContent = name;
+      } else {
+        const name = String(entry ?? '');
+        opt.value = name;
+        opt.textContent = name;
+      }
       targetSel.appendChild(opt);
     });
+    if (targetSel.options.length > 0) {
+      targetSel.selectedIndex = 0;
+    }
   } catch (e) {
     // ignore
   }

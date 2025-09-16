@@ -1,3 +1,5 @@
+"""FastAPI application exposing similarity search endpoints."""
+
 import os
 import os.path as osp
 import logging
@@ -33,6 +35,7 @@ logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
 
 
 def _shorten(value, maxlen: int = 200):
+    """Convert arbitrary values to a truncated string for logging."""
     try:
         s = str(value)
     except Exception:
@@ -74,6 +77,7 @@ BASE_DIR = osp.abspath(osp.join(osp.dirname(__file__), os.pardir))
 
 @debug_log
 def _resolve_root(env_name: str, default_rel: str) -> str:
+    """Resolve a root directory from configuration and defaults."""
     # If env is set and absolute, use as-is. If relative or not set, resolve from BASE_DIR.
     val = os.environ.get(env_name)
     if val:
@@ -105,6 +109,7 @@ logger.info("Configured CLIP_DIR=%s", CLIP_DIR)
 
 @debug_log
 def _ensure_model():
+    """Load the pose estimation model once and memoise it globally."""
     global _model
     if _model is None:
         _model = load_model("yolov8n-pose.pt")
@@ -113,12 +118,14 @@ def _ensure_model():
 
 @debug_log
 def _is_video(fname: str) -> bool:
+    """Return True when the file name looks like a supported video."""
     f = fname.lower()
     return f.endswith((".mp4", ".mov", ".avi", ".mkv", ".m4v"))
 
 
 @debug_log
 def _list_videos(root: str) -> List[str]:
+    """Enumerate available video files below the provided directory."""
     if not osp.isdir(root):
         return []
     return sorted([f for f in os.listdir(root) if _is_video(f)])
@@ -126,6 +133,7 @@ def _list_videos(root: str) -> List[str]:
 
 @debug_log
 def _rel_url(path: str) -> str:
+    """Convert a filesystem path into the URL served by FastAPI mounts."""
     # Convert absolute/relative file path to a mounted static URL
     ap = osp.abspath(path)
     if osp.isdir(TARGET_ROOT) and osp.commonpath([ap, TARGET_ROOT]) == TARGET_ROOT:
@@ -134,14 +142,31 @@ def _rel_url(path: str) -> str:
     if osp.isdir(REFERENCE_ROOT) and osp.commonpath([ap, REFERENCE_ROOT]) == REFERENCE_ROOT:
         rel = osp.relpath(ap, REFERENCE_ROOT).replace("\\", "/")
         return f"/videos/reference/{rel}"
+    if osp.isdir(CLIP_DIR) and osp.commonpath([ap, CLIP_DIR]) == CLIP_DIR:
+        rel = osp.relpath(ap, CLIP_DIR).replace("\\", "/")
+        return f"/clips/{rel}"
     # Fallback: try target mount
     rel = osp.basename(ap)
     return f"/videos/target/{rel}"
 
 
+def _assign_clip_metadata(entry: dict, clip_path: str) -> None:
+    """Update a search result entry so the clip under CLIP_DIR is displayed."""
+    clip_abs = osp.abspath(clip_path)
+    clip_url = _rel_url(clip_path)
+    clip_name = osp.basename(clip_path)
+    entry["clip_url"] = clip_url
+    entry["clip_abs"] = clip_abs
+    entry["clip_path"] = clip_path
+    entry["clip_name"] = clip_name
+    entry["display_name"] = clip_name
+    entry.setdefault("name", clip_name)
+
+
 @app.get("/", response_class=HTMLResponse)
 @debug_log
 async def index(request: Request):
+    """Render the search UI template."""
     return templates.TemplateResponse(
         "index.html",
         {
@@ -156,13 +181,43 @@ async def index(request: Request):
 @app.get("/api/videos")
 @debug_log
 async def list_videos():
-    items = _list_videos(TARGET_ROOT)
-    return {"root": REFERENCE_ROOT, "target_root": TARGET_ROOT, "reference_root": REFERENCE_ROOT, "videos": items}
+    """Expose the list of available target and clip videos."""
+    targets = [
+        {
+            "name": name,
+            "path": osp.abspath(osp.join(TARGET_ROOT, name)),
+            "url": _rel_url(osp.join(TARGET_ROOT, name)),
+            "source": "target",
+        }
+        for name in _list_videos(TARGET_ROOT)
+    ]
+
+    clips = []
+    if osp.isdir(CLIP_DIR):
+        clips = [
+            {
+                "name": name,
+                "path": osp.abspath(osp.join(CLIP_DIR, name)),
+                "url": _rel_url(osp.join(CLIP_DIR, name)),
+                "source": "clip",
+            }
+            for name in _list_videos(CLIP_DIR)
+        ]
+
+    return {
+        "root": REFERENCE_ROOT,
+        "target_root": TARGET_ROOT,
+        "reference_root": REFERENCE_ROOT,
+        "clip_root": CLIP_DIR,
+        "videos": targets,
+        "clips": clips,
+    }
 
 
 @app.post("/api/search")
 @debug_log
 async def search(payload: dict):
+    """Run similarity search for the requested target against candidate videos."""
     target = payload.get("target")
     candidates_dir = payload.get("candidates_dir")
     device = payload.get("device", "AUTO")
@@ -247,6 +302,8 @@ async def search(payload: dict):
         # Compute features for candidates
         cand_vecs: List[Tuple[str, object]] = []
         cand_windows = {}
+        clip_pool: List[dict] = []
+        used_clip_paths = set()
         for p, _ in cand_paths:
             if recompute:
                 try:
@@ -290,8 +347,11 @@ async def search(payload: dict):
                 "path": p,
                 "path_abs": osp.abspath(p),
                 "name": osp.basename(p),
+                "display_name": osp.basename(p),
                 "score": float(score),
                 "url": _rel_url(p),
+                "original_path": p,
+                "source": "reference",
             }
             if swing_only:
                 # try read window meta from cache if available
@@ -304,10 +364,7 @@ async def search(payload: dict):
                         item["start"], item["end"] = float(ws), float(we)
                         clip_path = make_video_clip(p, float(ws), float(we), CLIP_DIR, basename=osp.splitext(osp.basename(p))[0])
                         if clip_path and osp.exists(clip_path):
-                            item["clip_url"] = "/clips/" + osp.basename(clip_path)
-                            item["clip_abs"] = osp.abspath(clip_path)
-                            # Use clip filename (with _clip suffix) as display name
-                            item["name"] = osp.basename(clip_path)
+                            _assign_clip_metadata(item, clip_path)
                 except Exception:
                     pass
             # Fallback: if a pre-generated clip exists in the clip directory, use it
@@ -317,26 +374,28 @@ async def search(payload: dict):
                 matches = sorted(glob.glob(pattern))
                 if matches:
                     pre_clip = matches[0]
-                    item["clip_url"] = "/clips/" + osp.basename(pre_clip)
-                    item["clip_abs"] = osp.abspath(pre_clip)
-                    item["name"] = osp.basename(pre_clip)
+                    _assign_clip_metadata(item, pre_clip)
+            if item.get("clip_abs"):
+                used_clip_paths.add(item["clip_abs"])
             results.append(item)
 
         target_entry = {
             "path": tgt_path,
             "path_abs": osp.abspath(tgt_path),
             "name": osp.basename(tgt_path),
+            "display_name": osp.basename(tgt_path),
             "url": _rel_url(tgt_path),
+            "original_path": tgt_path,
+            "source": "target",
         }
         if swing_only and tgt_window:
             tws, twe = tgt_window
             target_entry["start"], target_entry["end"] = float(tws), float(twe)
             clip_path = make_video_clip(tgt_path, float(tws), float(twe), CLIP_DIR, basename=osp.splitext(osp.basename(tgt_path))[0])
             if clip_path and osp.exists(clip_path):
-                target_entry["clip_url"] = "/clips/" + osp.basename(clip_path)
-                target_entry["clip_abs"] = osp.abspath(clip_path)
-                # Use clip filename (with _clip suffix) as display name
-                target_entry["name"] = osp.basename(clip_path)
+                _assign_clip_metadata(target_entry, clip_path)
+                if target_entry.get("clip_abs"):
+                    used_clip_paths.add(target_entry["clip_abs"])
         # Fallback: use existing clip if present even when swing_only is false
         if "clip_url" not in target_entry:
             base = osp.splitext(osp.basename(tgt_path))[0]
@@ -344,11 +403,30 @@ async def search(payload: dict):
             matches = sorted(glob.glob(pattern))
             if matches:
                 pre_clip = matches[0]
-                target_entry["clip_url"] = "/clips/" + osp.basename(pre_clip)
-                target_entry["clip_abs"] = osp.abspath(pre_clip)
-                target_entry["name"] = osp.basename(pre_clip)
+                _assign_clip_metadata(target_entry, pre_clip)
+                if target_entry.get("clip_abs"):
+                    used_clip_paths.add(target_entry["clip_abs"])
 
-        return {"used_device": dev, "target": target_entry, "results": results}
+        if osp.isdir(CLIP_DIR):
+            for name in _list_videos(CLIP_DIR):
+                clip_full = osp.join(CLIP_DIR, name)
+                clip_abs = osp.abspath(clip_full)
+                if clip_abs in used_clip_paths:
+                    continue
+                clip_pool.append({
+                    "path": clip_full,
+                    "path_abs": clip_abs,
+                    "name": name,
+                    "display_name": name,
+                    "url": _rel_url(clip_full),
+                    "clip_url": _rel_url(clip_full),
+                    "clip_abs": clip_abs,
+                    "clip_path": clip_full,
+                    "clip_name": name,
+                    "source": "clip",
+                })
+
+        return {"used_device": dev, "target": target_entry, "results": results, "clip_pool": clip_pool}
 
     # Try requested device; on failure, retry with CPU
     try:
