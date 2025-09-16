@@ -2,60 +2,71 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Pose Similarity (FastAPI)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pose Similarity Search</title>
   <link rel="stylesheet" href="/static/styles.css" />
-  <script defer src="/static/app.js"></script>
-  <style>
-    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; width: 100%; }
-    .cell { background: #111; padding: 8px; border-radius: 6px; }
-    .label { font-weight: bold; margin: 4px 0; color: #eee; }
-    video { width: 100%; height: auto; aspect-ratio: 16 / 9; display: block; background: #000; object-fit: contain; }
-    header { margin-bottom: 12px; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0b0c10; color: #f4f4f4; margin: 0; }
-    main { width: 100%; padding: 0 12px 12px; box-sizing: border-box; }
-    input, select, button { padding: 6px 10px; margin: 4px; }
-  </style>
   <script>
-    window.TARGET_ROOT = "{{ target_root }}";
-    window.REFERENCE_ROOT = "{{ reference_root }}";
+    window.APP_CONFIG = {
+      targetRoot: "{{ target_root }}",
+      referenceRoot: "{{ reference_root }}"
+    };
   </script>
+  <script defer src="/static/app.js"></script>
 </head>
 <body>
-  <header>
-    <h2>Pose Similarity (YOLOv8-Pose / FastAPI)</h2>
-    <div>
-      <label>Target video:</label>
-      <select id="target-select"></select>
-      <label for="device-select">OpenVINO Device:</label>
-      <select id="device-select">
-        <option value="gpu">GPU (Intel)</option>
-        <option value="cpu">CPU</option>
-        <option value="auto" selected>AUTO</option>
-      </select>
-      <label>TopK:</label>
-      <input type="number" id="topk" min="1" max="20" value="5"/>
-      <label>Frame stride:</label>
-      <input type="number" id="stride" min="1" max="30" value="5"/>
-      <label><input type="checkbox" id="swing-only" checked /> Swing only</label>
-      <label>Window (s):</label>
-      <input type="number" id="swing-seconds" min="0.5" step="0.1" value="2.5" />
-      <button id="search-btn">Search</button>
-      <button id="recompute-btn" title="Recompute features ignoring cache">Recompute</button>
-    </div>
-    <div>
-      <button id="play-all">Play</button>
-      <button id="pause-all">Pause</button>
-      <label><input type="checkbox" id="sync-toggle" checked /> Sync play</label>
-    </div>
-  </header>
+  <main class="layout">
+    <section class="card">
+      <h1>Pose Similarity</h1>
+      <p class="text-muted">Compare target swings with reference videos.</p>
+      <form id="search-form" class="form">
+        <label class="form__row">
+          <span>Target video</span>
+          <div class="form__control">
+            <select id="target-select" name="target" required></select>
+            <button type="button" id="refresh-targets">Reload</button>
+          </div>
+          <small id="target-path" class="text-muted"></small>
+        </label>
 
-  <main>
-    <div id="grid" class="grid"></div>
+        <label class="form__row">
+          <span>OpenVINO device</span>
+          <select id="device-select" name="device">
+            <option value="AUTO" selected>AUTO</option>
+            <option value="GPU">GPU</option>
+            <option value="CPU">CPU</option>
+          </select>
+        </label>
+
+        <label class="form__row">
+          <span>TopK</span>
+          <input id="topk" name="topk" type="number" min="1" max="20" value="5" />
+        </label>
+
+        <label class="form__row">
+          <span>Swing duration (sec)</span>
+          <input id="swing-seconds" name="swing" type="number" min="0.5" step="0.1" value="2.5" />
+        </label>
+
+        <div class="form__actions">
+          <button type="submit" id="search-btn">Search</button>
+          <button type="button" id="recompute-btn">Recompute</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Status</h2>
+      <p id="status-line">Idle</p>
+      <p id="status-detail" class="text-muted">Select a target video and run a search.</p>
+    </section>
+
+    <section class="card">
+      <h2>Results</h2>
+      <p id="results-meta" class="text-muted"></p>
+      <ol id="results-list" class="results">
+        <li class="results__placeholder">Search results will appear here.</li>
+      </ol>
+    </section>
   </main>
-
-  <footer style="margin-top: 16px; opacity: .8;">
-    <small>TARGET_ROOT: {{ target_root }} / REFERENCE_ROOT: {{ reference_root }}</small>
-  </footer>
 </body>
 </html>

@@ -1,208 +1,311 @@
-async function fetchJSON(url, opts) {
-  const res = await fetch(url, opts);
-  if (!res.ok) throw new Error(await res.text());
-  return await res.json();
+const API = {
+  videos: "/api/videos",
+  search: "/api/search"
+};
+
+const DEFAULTS = {
+  topk: 5,
+  swingSeconds: 2.5,
+  frameStride: 5,
+  swingOnly: true
+};
+
+const state = {
+  videoMap: new Map(),
+  loadingTargets: false,
+  runningSearch: false
+};
+
+const els = {};
+
+async function fetchJSON(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `${response.status} ${response.statusText}`);
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+  return {};
 }
 
-function createVideoCell(label, item, isMaster=false) {
-  const cell = document.createElement('div');
-  cell.className = 'cell';
-  const lab = document.createElement('div');
-  lab.className = 'label';
-  const displayName = item?.display_name || item?.name || '';
-  lab.textContent = `${label}: ${displayName}`;
-
-  const url = item.clip_url || item.url; // play from /clips when available
-  const useClip = !!item.clip_url;
-
-  const vid = document.createElement('video');
-  vid.src = url;
-  vid.controls = true;
-  vid.preload = 'metadata';
-  vid.playsInline = true;
-  if (isMaster) vid.dataset.master = '1';
-
-  if (!useClip) {
-    if (item.start != null) vid.dataset.clipStart = String(item.start);
-    if (item.end != null) vid.dataset.clipEnd = String(item.end);
-    vid.addEventListener('loadedmetadata', () => {
-      const s = parseFloat(vid.dataset.clipStart || 'NaN');
-      if (!Number.isNaN(s)) { try { vid.currentTime = s; } catch(_){} }
-    });
-    vid.addEventListener('timeupdate', () => {
-      const s = parseFloat(vid.dataset.clipStart || 'NaN');
-      const e = parseFloat(vid.dataset.clipEnd || 'NaN');
-      if (!Number.isNaN(s) && vid.currentTime < s - 0.05) {
-        try { vid.currentTime = s; } catch(_){}
-      }
-      if (!Number.isNaN(e) && vid.currentTime > e - 0.05) {
-        try { vid.pause(); vid.currentTime = e; } catch(_){}
-      }
-    });
-  }
-
-  cell.appendChild(lab);
-  cell.appendChild(vid);
-  return { cell, vid };
+function setStatus(line, detail) {
+  if (els.statusLine) els.statusLine.textContent = line;
+  if (els.statusDetail) els.statusDetail.textContent = detail;
 }
 
-function setUpSync(gridEl) {
-  const syncToggle = document.getElementById('sync-toggle');
-  const playAll = document.getElementById('play-all');
-  const pauseAll = document.getElementById('pause-all');
+function setSearchDisabled(disabled) {
+  [els.searchBtn, els.recomputeBtn].forEach((button) => {
+    if (button) button.disabled = disabled;
+  });
+}
 
-  function getVideos() {
-    return Array.from(gridEl.querySelectorAll('video'));
+function updateTargetPath(name) {
+  if (!els.targetMeta) return;
+  const entry = state.videoMap.get(name || "");
+  if (!entry) {
+    els.targetMeta.textContent = "";
+    return;
   }
-  function master() {
-    return gridEl.querySelector('video[data-master="1"]');
+  if (entry.path) {
+    els.targetMeta.textContent = entry.path;
+    return;
+  }
+  const root = window.APP_CONFIG?.targetRoot;
+  if (!root) {
+    els.targetMeta.textContent = entry.name;
+    return;
+  }
+  const separator = root.endsWith("/") || root.endsWith("\\") ? "" : "/";
+  els.targetMeta.textContent = `${root}${separator}${entry.name}`;
+}
+
+function showPlaceholder(message) {
+  if (!els.resultsList) return;
+  els.resultsList.innerHTML = "";
+  const item = document.createElement("li");
+  item.className = "results__placeholder";
+  item.textContent = message;
+  els.resultsList.appendChild(item);
+  if (els.resultsMeta) els.resultsMeta.textContent = "";
+}
+
+function renderResults(payload, topk) {
+  if (!els.resultsList) return;
+  els.resultsList.innerHTML = "";
+
+  const target = payload?.target;
+  if (target) {
+    const item = document.createElement("li");
+    item.className = "results__item";
+    const title = document.createElement("strong");
+    title.textContent = "Target";
+    item.appendChild(title);
+    const name = document.createElement("div");
+    name.textContent = target.display_name || target.name || "Unknown";
+    item.appendChild(name);
+    if (target.path) {
+      const path = document.createElement("div");
+      path.className = "text-muted";
+      path.textContent = target.path;
+      item.appendChild(path);
+    }
+    els.resultsList.appendChild(item);
   }
 
-  playAll.onclick = () => {
-    const vids = getVideos();
-    vids.forEach(v => { try { v.play(); } catch(e){} });
-  };
-  pauseAll.onclick = () => {
-    const vids = getVideos();
-    vids.forEach(v => { try { v.pause(); } catch(e){} });
-  };
+  const slots = Number.isFinite(topk) && topk > 0 ? topk : DEFAULTS.topk;
+  const ranked = Array.isArray(payload?.results) ? payload.results : [];
+  const clipPool = Array.isArray(payload?.clip_pool) ? [...payload.clip_pool] : [];
 
-  function syncToMaster() {
-    const m = master();
-    if (!m) return;
-    const t = m.currentTime;
-    const vids = getVideos().filter(v => v !== m);
-    vids.forEach(v => {
-      if (!syncToggle.checked) return;
-      const diff = Math.abs(v.currentTime - t);
-      if (diff > 0.12) {
-        try { v.currentTime = t; } catch(e){}
+  let rankedCount = 0;
+  let clipCount = 0;
+  let emptyCount = 0;
+
+  for (let index = 0; index < slots; index += 1) {
+    let entry = ranked[index];
+    let fromClipPool = false;
+
+    if (!entry && clipPool.length) {
+      entry = clipPool.shift();
+      fromClipPool = true;
+    }
+
+    const item = document.createElement("li");
+    item.className = "results__item";
+    const title = document.createElement("strong");
+    title.textContent = `Top ${index + 1}`;
+    item.appendChild(title);
+
+    if (!entry) {
+      item.appendChild(document.createTextNode("(empty)"));
+      emptyCount += 1;
+    } else {
+      const name = document.createElement("div");
+      name.textContent = entry.display_name || entry.name || entry.clip_name || "Unknown";
+      item.appendChild(name);
+
+      if (typeof entry.score === "number" && Number.isFinite(entry.score)) {
+        const score = document.createElement("div");
+        score.className = "text-muted";
+        score.textContent = `score ${entry.score.toFixed(3)}`;
+        item.appendChild(score);
       }
-      if (!m.paused && v.paused) {
-        try { v.play(); } catch(e){}
+
+      const pathText = entry.path || entry.clip_path;
+      if (pathText) {
+        const path = document.createElement("div");
+        path.className = "text-muted";
+        path.textContent = pathText;
+        item.appendChild(path);
       }
-      if (m.paused && !v.paused) {
-        try { v.pause(); } catch(e){}
+
+      if (fromClipPool) {
+        clipCount += 1;
+      } else {
+        rankedCount += 1;
       }
+    }
+
+    els.resultsList.appendChild(item);
+  }
+
+  if (els.resultsMeta) {
+    const device = payload?.used_device || els.deviceSelect?.value || "AUTO";
+    els.resultsMeta.textContent = `${rankedCount} ranked ﾂｷ ${clipCount} from clips ﾂｷ ${emptyCount} empty ﾂｷ device ${device}`;
+  }
+}
+
+async function loadTargets() {
+  if (state.loadingTargets || !els.targetSelect) return;
+  state.loadingTargets = true;
+  if (els.refreshTargets) els.refreshTargets.disabled = true;
+
+  try {
+    const data = await fetchJSON(API.videos);
+    const videos = Array.isArray(data?.videos) ? data.videos : [];
+
+    state.videoMap.clear();
+    els.targetSelect.innerHTML = "";
+
+    let firstName = "";
+    for (const entry of videos) {
+      if (!entry || typeof entry !== "object") continue;
+      const baseName = entry.name || entry.display_name || (entry.path ? entry.path.split(/[\\/]/).pop() : "");
+      if (!baseName) continue;
+      entry.name = baseName;
+      state.videoMap.set(baseName, entry);
+      const option = document.createElement("option");
+      option.value = baseName;
+      option.textContent = baseName;
+      els.targetSelect.appendChild(option);
+      if (!firstName) firstName = baseName;
+    }
+
+    if (firstName) {
+      els.targetSelect.value = firstName;
+      updateTargetPath(firstName);
+    } else {
+      updateTargetPath("");
+    }
+  } catch (error) {
+    const message = error?.message || "Failed to load targets";
+    setStatus("Error", message);
+    throw error;
+  } finally {
+    state.loadingTargets = false;
+    if (els.refreshTargets) els.refreshTargets.disabled = false;
+  }
+}
+
+function readNumber(input, fallback, minimum) {
+  if (!input) return fallback;
+  const value = Number(input.value);
+  if (!Number.isFinite(value)) return fallback;
+  if (typeof minimum === "number" && value < minimum) return fallback;
+  return value;
+}
+
+async function runSearch({ recompute = false } = {}) {
+  if (state.runningSearch) return;
+  if (!els.targetSelect?.value) {
+    setStatus("Error", "Select a target video first.");
+    return;
+  }
+
+  state.runningSearch = true;
+  setSearchDisabled(true);
+
+  const target = els.targetSelect.value;
+  const device = els.deviceSelect?.value || "AUTO";
+  const topk = readNumber(els.topk, DEFAULTS.topk, 1);
+  const swingSeconds = readNumber(els.swingSeconds, DEFAULTS.swingSeconds, 0.5);
+
+  const pendingText = recompute ? "Recomputing features..." : "Searching...";
+  setStatus("Working", pendingText);
+  showPlaceholder(pendingText);
+
+  try {
+    const requestBody = {
+      target,
+      device,
+      topk,
+      swing_seconds: swingSeconds,
+      frame_stride: DEFAULTS.frameStride,
+      swing_only: DEFAULTS.swingOnly
+    };
+    if (recompute) requestBody.recompute = true;
+
+    const data = await fetchJSON(API.search, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody)
     });
-  }
 
-  const m = master();
-  if (m) m.addEventListener('timeupdate', syncToMaster);
+    renderResults(data, topk);
+    const deviceUsed = data?.used_device || device;
+    setStatus("Done", `Search finished on ${deviceUsed}.`);
+  } catch (error) {
+    const message = error?.message || "Search failed";
+    setStatus("Error", message);
+    showPlaceholder(message);
+  } finally {
+    state.runningSearch = false;
+    setSearchDisabled(false);
+  }
+}
+
+function bindEvents() {
+  document.getElementById("search-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    runSearch();
+  });
+
+  els.recomputeBtn?.addEventListener("click", () => runSearch({ recompute: true }));
+
+  els.refreshTargets?.addEventListener("click", async () => {
+    setStatus("Working", "Reloading target list...");
+    try {
+      await loadTargets();
+      setStatus("Idle", "Targets updated. Run a search when ready.");
+    } catch (error) {
+      // loadTargets already reported the error via setStatus
+    }
+  });
+
+  els.targetSelect?.addEventListener("change", (event) => {
+    updateTargetPath(event.target.value);
+  });
 }
 
 async function init() {
-  const targetSel = document.getElementById('target-select');
-  const grid = document.getElementById('grid');
-  const topkEl = document.getElementById('topk');
-  const strideEl = document.getElementById('stride');
-  const deviceSel = document.getElementById('device-select');
-  const swingOnlyEl = document.getElementById('swing-only');
-  const swingSecsEl = document.getElementById('swing-seconds');
+  els.targetSelect = document.getElementById("target-select");
+  els.refreshTargets = document.getElementById("refresh-targets");
+  els.targetMeta = document.getElementById("target-path");
+  els.deviceSelect = document.getElementById("device-select");
+  els.topk = document.getElementById("topk");
+  els.swingSeconds = document.getElementById("swing-seconds");
+  els.searchBtn = document.getElementById("search-btn");
+  els.recomputeBtn = document.getElementById("recompute-btn");
+  els.statusLine = document.getElementById("status-line");
+  els.statusDetail = document.getElementById("status-detail");
+  els.resultsList = document.getElementById("results-list");
+  els.resultsMeta = document.getElementById("results-meta");
 
-  const renderResults = (res) => {
-    grid.innerHTML = '';
-    if (!res) {
-      grid.innerHTML = '(no results)';
-      return;
-    }
+  setStatus("Idle", "Select a target video and run a search.");
+  showPlaceholder("Search results will appear here.");
 
-    const clipPool = Array.isArray(res.clip_pool) ? res.clip_pool.slice() : [];
-    const takeClip = () => (clipPool.length ? clipPool.shift() : null);
-    const slotRaw = Number(topkEl.value || 5);
-    const slotCount = Number.isFinite(slotRaw) && slotRaw > 0 ? slotRaw : 5;
-
-    if (res.target) {
-      const targetCell = createVideoCell('Target', res.target, true);
-      grid.appendChild(targetCell.cell);
-    } else {
-      const cell = document.createElement('div');
-      cell.className = 'cell';
-      cell.innerHTML = '<div class="label">(no target)</div>';
-      grid.appendChild(cell);
-    }
-
-    for (let i = 0; i < slotCount; i++) {
-      let item = Array.isArray(res.results) ? res.results[i] : null;
-      if (!item) {
-        item = takeClip();
-      } else if (!item.clip_url) {
-        const fallback = takeClip();
-        if (fallback) {
-          item = {
-            ...item,
-            clip_url: fallback.clip_url || fallback.url,
-            clip_abs: fallback.clip_abs,
-            clip_path: fallback.clip_path || fallback.path,
-            clip_name: fallback.clip_name || fallback.name,
-            display_name: fallback.display_name || item.display_name || item.name,
-          };
-        }
-      }
-      if (!item) {
-        const cell = document.createElement('div');
-        cell.className = 'cell';
-        cell.innerHTML = '<div class="label">(empty)</div>';
-        grid.appendChild(cell);
-        continue;
-      }
-      const { cell: c } = createVideoCell(`Top ${i + 1}`, item, false);
-      grid.appendChild(c);
-    }
-
-    setUpSync(grid);
-  };
-
-  const runSearch = async (overrides = {}) => {
-    const target = targetSel.value;
-    const topk = Number(topkEl.value || 5);
-    const frame_stride = Number(strideEl.value || 5);
-    const device = (deviceSel?.value || 'auto');
-    const swing_only = !!(swingOnlyEl?.checked);
-    const swing_seconds = Number(swingSecsEl?.value || 2.5);
-    grid.innerHTML = overrides.recompute ? 'Recomputing...' : 'Searching...';
-    try {
-      const res = await fetchJSON('/api/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target, device, topk, frame_stride, swing_only, swing_seconds, ...overrides }),
-      });
-      renderResults(res);
-    } catch (e) {
-      grid.innerHTML = 'Error: ' + e;
-    }
-  };
-
-  document.getElementById('search-btn').onclick = () => { runSearch(); };
-
-  const recomputeBtn = document.getElementById('recompute-btn');
-  if (recomputeBtn) {
-    recomputeBtn.onclick = () => { runSearch({ recompute: true }); };
-  }
+  bindEvents();
 
   try {
-    const data = await fetchJSON('/api/videos');
-    targetSel.innerHTML = '';
-    const videos = Array.isArray(data?.videos) ? data.videos : [];
-    videos.forEach(entry => {
-      const opt = document.createElement('option');
-      if (entry && typeof entry === 'object') {
-        const name = entry.name ?? entry.path ?? '';
-        opt.value = name;
-        opt.textContent = name;
-      } else {
-        const name = String(entry ?? '');
-        opt.value = name;
-        opt.textContent = name;
-      }
-      targetSel.appendChild(opt);
-    });
-    if (targetSel.options.length > 0) {
-      targetSel.selectedIndex = 0;
+    await loadTargets();
+    if (els.targetSelect?.value) {
+      setStatus("Idle", "Ready to search.");
     }
-  } catch (e) {
-    // ignore
+  } catch (error) {
+    // loadTargets already surfaced the error message
   }
 }
 
-window.addEventListener('DOMContentLoaded', init);
+window.addEventListener("DOMContentLoaded", init);
