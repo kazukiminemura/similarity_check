@@ -1,4 +1,4 @@
-﻿"""FastAPI application exposing similarity search endpoints."""
+"""FastAPI application exposing similarity search endpoints."""
 
 import os
 import os.path as osp

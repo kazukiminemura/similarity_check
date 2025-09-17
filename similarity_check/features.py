@@ -1,4 +1,4 @@
-﻿import os
+import os
 import os.path as osp
 import logging
 from typing import List, Tuple, Optional, Dict

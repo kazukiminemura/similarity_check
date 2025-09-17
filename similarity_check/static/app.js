@@ -1,4 +1,4 @@
-﻿const API = {
+const API = {
   videos: "/api/videos",
   search: "/api/search"
 };
