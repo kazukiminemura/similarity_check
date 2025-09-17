@@ -124,8 +124,15 @@ button:disabled {
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   font-size: 0.95rem;
+}
+
+.results__topline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .results__item strong {
@@ -133,6 +140,26 @@ button:disabled {
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: #5ee7ff;
+}
+
+.results__name {
+  font-weight: 500;
+}
+
+.results__video {
+  width: 100%;
+  max-height: 240px;
+  border-radius: 8px;
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.results__badge {
+  font-size: 0.75rem;
+  color: rgba(245, 245, 245, 0.65);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 2px 8px;
 }
 
 .results__placeholder {

@@ -1,11 +1,11 @@
-const API = {
+﻿const API = {
   videos: "/api/videos",
   search: "/api/search"
 };
 
 const DEFAULTS = {
   topk: 5,
-  swingSeconds: 2.5,
+  swingSeconds: 5,
   frameStride: 5,
   swingOnly: true
 };
@@ -72,32 +72,131 @@ function showPlaceholder(message) {
   if (els.resultsMeta) els.resultsMeta.textContent = "";
 }
 
+function createVideoElement(entry) {
+  const src = entry?.clip_url || entry?.url;
+  if (!src) return null;
+  const video = document.createElement("video");
+  video.className = "results__video";
+  video.controls = true;
+  video.playsInline = true;
+  video.preload = "metadata";
+  video.src = src;
+
+  const start = typeof entry?.start === "number" ? entry.start : undefined;
+  const end = typeof entry?.end === "number" ? entry.end : undefined;
+
+  if (start !== undefined || end !== undefined) {
+    const startTime = Number(start);
+    const endTime = Number(end);
+
+    if (!Number.isNaN(startTime)) {
+      video.addEventListener("loadedmetadata", () => {
+        try {
+          video.currentTime = startTime;
+        } catch (error) {
+          // ignore seek errors
+        }
+      }, { once: true });
+    }
+
+    video.addEventListener("timeupdate", () => {
+      if (!Number.isNaN(startTime) && video.currentTime < startTime - 0.05) {
+        try {
+          video.currentTime = startTime;
+        } catch (error) {
+          // ignore seek errors
+        }
+      }
+      if (!Number.isNaN(endTime) && video.currentTime > endTime - 0.05) {
+        try {
+          video.pause();
+          video.currentTime = endTime;
+        } catch (error) {
+          // ignore seek errors
+        }
+      }
+    });
+  }
+
+  return video;
+}
+
+function appendResultItem(label, entry, { fromClipPool = false } = {}) {
+  if (!els.resultsList) return;
+  const item = document.createElement("li");
+  item.className = "results__item";
+
+  const topLine = document.createElement("div");
+  topLine.className = "results__topline";
+
+  const title = document.createElement("strong");
+  title.textContent = label;
+  topLine.appendChild(title);
+
+  if (typeof entry?.score === "number" && Number.isFinite(entry.score)) {
+    const score = document.createElement("span");
+    score.className = "results__badge";
+    score.textContent = `score ${entry.score.toFixed(3)}`;
+    topLine.appendChild(score);
+  }
+
+  if (fromClipPool) {
+    const badge = document.createElement("span");
+    badge.className = "results__badge";
+    badge.textContent = "clip pool";
+    topLine.appendChild(badge);
+  }
+
+  item.appendChild(topLine);
+
+  if (!entry) {
+    const empty = document.createElement("div");
+    empty.className = "text-muted";
+    empty.textContent = "(empty)";
+    item.appendChild(empty);
+    els.resultsList.appendChild(item);
+    return;
+  }
+
+  const name = document.createElement("div");
+  name.className = "results__name";
+  name.textContent = entry.display_name || entry.name || entry.clip_name || "Unknown";
+  item.appendChild(name);
+
+  const video = createVideoElement(entry);
+  if (video) {
+    item.appendChild(video);
+  }
+
+  const pathText = entry.clip_path || entry.path;
+  if (pathText) {
+    const path = document.createElement("div");
+    path.className = "text-muted";
+    path.textContent = pathText;
+    item.appendChild(path);
+  }
+
+  els.resultsList.appendChild(item);
+}
+
 function renderResults(payload, topk) {
   if (!els.resultsList) return;
+
+  if (!payload) {
+    showPlaceholder("No response from server.");
+    return;
+  }
+
   els.resultsList.innerHTML = "";
 
-  const target = payload?.target;
+  const target = payload.target;
   if (target) {
-    const item = document.createElement("li");
-    item.className = "results__item";
-    const title = document.createElement("strong");
-    title.textContent = "Target";
-    item.appendChild(title);
-    const name = document.createElement("div");
-    name.textContent = target.display_name || target.name || "Unknown";
-    item.appendChild(name);
-    if (target.path) {
-      const path = document.createElement("div");
-      path.className = "text-muted";
-      path.textContent = target.path;
-      item.appendChild(path);
-    }
-    els.resultsList.appendChild(item);
+    appendResultItem("Target", target);
   }
 
   const slots = Number.isFinite(topk) && topk > 0 ? topk : DEFAULTS.topk;
-  const ranked = Array.isArray(payload?.results) ? payload.results : [];
-  const clipPool = Array.isArray(payload?.clip_pool) ? [...payload.clip_pool] : [];
+  const ranked = Array.isArray(payload.results) ? payload.results : [];
+  const clipPool = Array.isArray(payload.clip_pool) ? [...payload.clip_pool] : [];
 
   let rankedCount = 0;
   let clipCount = 0;
@@ -112,48 +211,20 @@ function renderResults(payload, topk) {
       fromClipPool = true;
     }
 
-    const item = document.createElement("li");
-    item.className = "results__item";
-    const title = document.createElement("strong");
-    title.textContent = `Top ${index + 1}`;
-    item.appendChild(title);
+    appendResultItem(`Top ${index + 1}`, entry, { fromClipPool });
 
     if (!entry) {
-      item.appendChild(document.createTextNode("(empty)"));
       emptyCount += 1;
+    } else if (fromClipPool) {
+      clipCount += 1;
     } else {
-      const name = document.createElement("div");
-      name.textContent = entry.display_name || entry.name || entry.clip_name || "Unknown";
-      item.appendChild(name);
-
-      if (typeof entry.score === "number" && Number.isFinite(entry.score)) {
-        const score = document.createElement("div");
-        score.className = "text-muted";
-        score.textContent = `score ${entry.score.toFixed(3)}`;
-        item.appendChild(score);
-      }
-
-      const pathText = entry.path || entry.clip_path;
-      if (pathText) {
-        const path = document.createElement("div");
-        path.className = "text-muted";
-        path.textContent = pathText;
-        item.appendChild(path);
-      }
-
-      if (fromClipPool) {
-        clipCount += 1;
-      } else {
-        rankedCount += 1;
-      }
+      rankedCount += 1;
     }
-
-    els.resultsList.appendChild(item);
   }
 
   if (els.resultsMeta) {
-    const device = payload?.used_device || els.deviceSelect?.value || "AUTO";
-    els.resultsMeta.textContent = `${rankedCount} ranked ﾂｷ ${clipCount} from clips ﾂｷ ${emptyCount} empty ﾂｷ device ${device}`;
+    const device = payload.used_device || els.deviceSelect?.value || "AUTO";
+    els.resultsMeta.textContent = `${rankedCount} ranked · ${clipCount} from clips · ${emptyCount} empty · device ${device}`;
   }
 }
 

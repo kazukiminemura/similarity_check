@@ -1,4 +1,4 @@
-import os
+﻿import os
 import os.path as osp
 import logging
 from typing import List, Tuple, Optional, Dict
@@ -167,7 +167,7 @@ def extract_video_features(
     progress: bool = True,
     device: Optional[str] = None,
     swing_only: bool = False,
-    swing_seconds: Optional[float] = 2.5,
+    swing_seconds: Optional[float] = 5,
 ) -> Dict[str, np.ndarray]:
     """
     Run pose estimation and build a video-level descriptor.
@@ -273,7 +273,7 @@ def extract_video_features(
             energy_s = energy
         peak = int(np.argmax(energy_s))  # center between frames peak and peak+1
         if swing_seconds is None:
-            swing_seconds = 2.5
+            swing_seconds = 5
         # samples_per_second under the given stride (recomputed above)
         win = int(max(5, min(per_frame.shape[0], round(samples_per_second * swing_seconds))))
         half = max(2, win // 2)

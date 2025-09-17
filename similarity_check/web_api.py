@@ -1,4 +1,4 @@
-"""FastAPI application exposing similarity search endpoints."""
+﻿"""FastAPI application exposing similarity search endpoints."""
 
 import os
 import os.path as osp
@@ -224,7 +224,7 @@ async def search(payload: dict):
     topk = int(payload.get("topk", 5))
     frame_stride = int(payload.get("frame_stride", 5))
     swing_only = bool(payload.get("swing_only", True))
-    swing_seconds = payload.get("swing_seconds", 2.5)
+    swing_seconds = payload.get("swing_seconds", 5)
     recompute = bool(payload.get("recompute", False))
 
     logger.debug("Search request: target=%s candidates_dir=%s device=%s topk=%s stride=%s",
