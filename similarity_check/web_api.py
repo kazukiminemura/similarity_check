@@ -12,12 +12,14 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+import uvicorn
 
 from similarity_check.features import (
     load_model,
     extract_video_features,
     load_feature_cache,
     save_feature_cache,
+    load_feature_meta,
 )
 from similarity_check.similarity import rank_similar
 from similarity_check.video_utils import make_video_clip
@@ -331,8 +333,7 @@ async def search(payload: dict):
                 if ws >= 0 and we >= 0:
                     cand_windows[p] = (ws, we)
             else:
-                from similarity_check.features import load_feature_meta as _lfm
-                meta = _lfm(cache_dir, p)
+                meta = load_feature_meta(cache_dir, p)
                 ws = meta.get("window_start_sec")
                 we = meta.get("window_end_sec")
                 if ws is not None and we is not None:
@@ -356,8 +357,7 @@ async def search(payload: dict):
             if swing_only:
                 # try read window meta from cache if available
                 try:
-                    from similarity_check.features import load_feature_meta as _lfm
-                    meta = _lfm(cache_dir, p)
+                    meta = load_feature_meta(cache_dir, p)
                     ws = meta.get("window_start_sec")
                     we = meta.get("window_end_sec")
                     if ws is not None and we is not None:
@@ -441,6 +441,4 @@ async def search(payload: dict):
 
 
 if __name__ == "__main__":
-    import uvicorn
-
     uvicorn.run("similarity_check.web_api:app", host="127.0.0.1", port=8000, reload=False)

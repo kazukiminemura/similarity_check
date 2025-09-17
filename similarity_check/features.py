@@ -7,10 +7,7 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
-try:
-    from ultralytics import YOLO
-except Exception as e:  # pragma: no cover
-    YOLO = None  # type: ignore
+from ultralytics import YOLO
 
 
 logger = logging.getLogger("similarity_check.features")
