@@ -82,10 +82,11 @@ function createVideoElement(entry) {
   video.preload = "metadata";
   video.src = src;
 
+  const hasClipSrc = Boolean(entry?.clip_url);
   const start = typeof entry?.start === "number" ? entry.start : undefined;
   const end = typeof entry?.end === "number" ? entry.end : undefined;
 
-  if (start !== undefined || end !== undefined) {
+  if (!hasClipSrc && (start !== undefined || end !== undefined)) {
     const startTime = Number(start);
     const endTime = Number(end);
 

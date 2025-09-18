@@ -1,3 +1,4 @@
+import logging
 import os
 import os.path as osp
 import shutil
@@ -6,6 +7,15 @@ from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger("similarity_check.video_utils")
+
+
+def _format_time(value) -> str:
+    try:
+        return f"{float(value):.3f}"
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def ensure_dir(path: str) -> None:
@@ -19,24 +29,60 @@ def _ffmpeg_available() -> bool:
 
 def _make_clip_ffmpeg(src_path: str, start_sec: float, end_sec: float, out_path: str) -> bool:
     try:
+        duration = max(0.0, end_sec - start_sec)
+        if duration <= 0:
+            logger.debug(
+                "ffmpeg clip request has non-positive duration for %s (start=%s end=%s)",
+                src_path,
+                _format_time(start_sec),
+                _format_time(end_sec),
+            )
+            return False
         cmd = [
             "ffmpeg",
             "-y",
             "-ss",
             f"{max(0.0, start_sec):.3f}",
-            "-to",
-            f"{max(0.0, end_sec):.3f}",
             "-i",
             src_path,
-            "-c",
+            "-t",
+            f"{duration:.3f}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
             "copy",
             "-movflags",
             "+faststart",
+            "-loglevel",
+            "error",
             out_path,
         ]
+        logger.debug(
+            "Running ffmpeg clip command for %s (window %s-%s): %s",
+            src_path,
+            _format_time(start_sec),
+            _format_time(end_sec),
+            " ".join(cmd),
+        )
         completed = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return completed.returncode == 0 and osp.exists(out_path) and osp.getsize(out_path) > 0
+        success = completed.returncode == 0 and osp.exists(out_path) and osp.getsize(out_path) > 0
+        if success:
+            logger.debug("ffmpeg clip command succeeded for %s", out_path)
+        else:
+            logger.debug(
+                "ffmpeg clip command failed for %s (returncode=%s)",
+                out_path,
+                completed.returncode,
+            )
+        return success
     except Exception:
+        logger.exception("ffmpeg clip command raised an error for %s", src_path)
         return False
 
 
@@ -198,19 +244,56 @@ def make_video_clip(
     basename: Optional[str] = None,
 ) -> Optional[str]:
     """Save a clipped segment [start_sec, end_sec] from src_path into out_dir."""
+    cap: Optional[cv2.VideoCapture] = None
+    writer = None
+    out_path: Optional[str] = None
     try:
+        logger.debug(
+            "make_video_clip called src_path=%s start_sec=%s end_sec=%s out_dir=%s basename=%s",
+            src_path,
+            start_sec,
+            end_sec,
+            out_dir,
+            basename,
+        )
+        start_fmt = _format_time(start_sec)
+        end_fmt = _format_time(end_sec)
+        window_label = f"{start_fmt}-{end_fmt}"
+
         if start_sec is None or end_sec is None:
+            logger.info(
+                "Skipping clip creation for %s: missing window (%s)",
+                src_path,
+                window_label,
+            )
             return None
         if end_sec <= start_sec:
+            logger.info(
+                "Skipping clip creation for %s: invalid window (%s)",
+                src_path,
+                window_label,
+            )
             return None
+
         cap = cv2.VideoCapture(src_path)
         if not cap.isOpened():
+            logger.warning("Failed to open source video for clip creation: %s", src_path)
+            cap.release()
+            cap = None
             return None
+
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         if width <= 0 or height <= 0:
+            logger.warning(
+                "Invalid video dimensions for clip creation: %s (width=%s height=%s)",
+                src_path,
+                width,
+                height,
+            )
             cap.release()
+            cap = None
             return None
 
         start_f = max(0, int(round(start_sec * fps)))
@@ -224,16 +307,51 @@ def make_video_clip(
         if osp.exists(out_path):
             try:
                 os.remove(out_path)
-            except Exception:
-                pass
+                logger.debug("Removed pre-existing clip file: %s", out_path)
+            except Exception as err:
+                logger.debug("Could not remove pre-existing clip file %s: %s", out_path, err)
 
         if _ffmpeg_available():
+            logger.debug(
+                "Attempting to create clip with ffmpeg for %s (window %s)",
+                src_path,
+                window_label,
+            )
             if _make_clip_ffmpeg(src_path, start_sec, end_sec, out_path):
                 cap.release()
+                cap = None
+                logger.info(
+                    "Created clip via ffmpeg: %s (window %s)",
+                    out_path,
+                    window_label,
+                )
                 return out_path
+            logger.debug(
+                "ffmpeg clip creation failed for %s; falling back to OpenCV",
+                src_path,
+            )
+        else:
+            logger.debug("ffmpeg not available; using OpenCV writer for %s", src_path)
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
+        writer = None
+        writer_fourcc = None
+        for fourcc_name in ("avc1", "H264", "h264", "X264"):
+            fourcc = cv2.VideoWriter_fourcc(*fourcc_name)
+            writer = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
+            if writer.isOpened():
+                writer_fourcc = fourcc_name
+                break
+            writer.release()
+            writer = None
+        if writer is None:
+            logger.warning(
+                "OpenCV H.264 encoder unavailable for %s; skipping clip generation",
+                src_path,
+            )
+            cap.release()
+            cap = None
+            return None
+        logger.debug("OpenCV VideoWriter initialised with %s for %s", writer_fourcc, out_path)
 
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_f)
         fidx = start_f
@@ -247,13 +365,46 @@ def make_video_clip(
             fidx += 1
 
         writer.release()
+        writer = None
         cap.release()
+        cap = None
+
         if not ok_any:
+            try:
+                if out_path and osp.exists(out_path):
+                    os.remove(out_path)
+            except Exception as err:
+                logger.debug("Could not remove empty clip file %s: %s", out_path, err)
+            logger.warning(
+                "Failed to create clip via OpenCV for %s (window %s): no frames written",
+                src_path,
+                window_label,
+            )
+            return None
+
+        logger.info(
+            "Created clip via OpenCV: %s (window %s)",
+            out_path,
+            window_label,
+        )
+        return out_path
+    except Exception:
+        logger.exception("Unexpected error while creating clip for %s", src_path)
+        if writer is not None:
+            try:
+                writer.release()
+            except Exception:
+                pass
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+        if out_path and osp.exists(out_path):
             try:
                 os.remove(out_path)
             except Exception:
                 pass
-            return None
-        return out_path
-    except Exception:
         return None
+
+
