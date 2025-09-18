@@ -13,7 +13,8 @@ const DEFAULTS = {
 const state = {
   videoMap: new Map(),
   loadingTargets: false,
-  runningSearch: false
+  runningSearch: false,
+  resultsLayout: "two-rows"
 };
 
 const els = {};
@@ -41,6 +42,25 @@ function setSearchDisabled(disabled) {
     if (button) button.disabled = disabled;
   });
 }
+
+function setActiveLayoutButton(layout) {
+  if (!Array.isArray(els.layoutButtons)) return;
+  els.layoutButtons.forEach((button) => {
+    const isActive = button.dataset.layout === layout;
+    button.classList.toggle("results-controls__btn--active", isActive);
+  });
+}
+
+
+function applyResultsLayout(layout) {
+  const normalized = layout === "two-rows" ? "two-rows" : "list";
+  state.resultsLayout = normalized;
+  if (!els.resultsList) return;
+  els.resultsList.classList.toggle("results--two-rows", normalized === "two-rows");
+  setActiveLayoutButton(normalized);
+}
+
+
 
 function updateTargetPath(name) {
   if (!els.targetMeta) return;
@@ -349,6 +369,15 @@ function bindEvents() {
   els.targetSelect?.addEventListener("change", (event) => {
     updateTargetPath(event.target.value);
   });
+  if (Array.isArray(els.layoutButtons)) {
+    els.layoutButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const layout = button.dataset.layout;
+        if (!layout || layout === state.resultsLayout) return;
+        applyResultsLayout(layout);
+      });
+    });
+  }
 }
 
 async function init() {
@@ -364,6 +393,8 @@ async function init() {
   els.statusDetail = document.getElementById("status-detail");
   els.resultsList = document.getElementById("results-list");
   els.resultsMeta = document.getElementById("results-meta");
+  els.layoutButtons = Array.from(document.querySelectorAll(".results-controls__btn"));
+  applyResultsLayout(state.resultsLayout);
 
   setStatus("Idle", "Select a target video and run a search.");
   showPlaceholder("Search results will appear here.");

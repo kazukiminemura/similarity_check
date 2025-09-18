@@ -54,14 +54,13 @@
       </form>
     </section>
 
-    <section class="card">
-      <h2>Status</h2>
-      <p id="status-line">Idle</p>
-      <p id="status-detail" class="text-muted">Select a target video and run a search.</p>
-    </section>
 
     <section class="card">
       <h2>Results</h2>
+      <div class="results-controls">
+        <button type="button" class="results-controls__btn" data-layout="list">1列</button>
+        <button type="button" class="results-controls__btn results-controls__btn--active" data-layout="two-rows">2段</button>
+      </div>
       <p id="results-meta" class="text-muted"></p>
       <ol id="results-list" class="results">
         <li class="results__placeholder">Search results will appear here.</li>
