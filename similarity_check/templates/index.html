@@ -12,6 +12,7 @@
     };
   </script>
   <script defer src="/static/app.js"></script>
+  
 </head>
 <body>
   <main class="layout">
@@ -54,9 +55,14 @@
       </form>
     </section>
 
-
     <section class="card">
       <h2>Results</h2>
+      <div id="target-container" class="target">
+        <div class="results__topline">
+          <strong>Target</strong>
+        </div>
+        <div class="text-muted">Select a target and run search to preview.</div>
+      </div>
       <div class="results-controls">
         <button type="button" class="results-controls__btn" data-layout="list">1列</button>
         <button type="button" class="results-controls__btn results-controls__btn--active" data-layout="two-rows">2段</button>
@@ -69,3 +75,4 @@
   </main>
 </body>
 </html>
+

@@ -92,6 +92,44 @@ function showPlaceholder(message) {
   if (els.resultsMeta) els.resultsMeta.textContent = "";
 }
 
+function renderTarget(entry) {
+  if (!els.targetContainer) return;
+  els.targetContainer.innerHTML = "";
+
+  const header = document.createElement("div");
+  header.className = "results__topline";
+  const title = document.createElement("strong");
+  title.textContent = "Target";
+  header.appendChild(title);
+  els.targetContainer.appendChild(header);
+
+  if (!entry) {
+    const empty = document.createElement("div");
+    empty.className = "text-muted";
+    empty.textContent = "(no target preview)";
+    els.targetContainer.appendChild(empty);
+    return;
+  }
+
+  const name = document.createElement("div");
+  name.className = "results__name";
+  name.textContent = entry.display_name || entry.name || entry.clip_name || "Unknown";
+  els.targetContainer.appendChild(name);
+
+  const video = createVideoElement(entry);
+  if (video) {
+    els.targetContainer.appendChild(video);
+  }
+
+  const pathText = entry.clip_path || entry.path;
+  if (pathText) {
+    const path = document.createElement("div");
+    path.className = "text-muted";
+    path.textContent = pathText;
+    els.targetContainer.appendChild(path);
+  }
+}
+
 function createVideoElement(entry) {
   const src = entry?.clip_url || entry?.url;
   if (!src) return null;
@@ -211,9 +249,7 @@ function renderResults(payload, topk) {
   els.resultsList.innerHTML = "";
 
   const target = payload.target;
-  if (target) {
-    appendResultItem("Target", target);
-  }
+  renderTarget(target);
 
   const slots = Number.isFinite(topk) && topk > 0 ? topk : DEFAULTS.topk;
   const ranked = Array.isArray(payload.results) ? payload.results : [];
@@ -394,6 +430,7 @@ async function init() {
   els.resultsList = document.getElementById("results-list");
   els.resultsMeta = document.getElementById("results-meta");
   els.layoutButtons = Array.from(document.querySelectorAll(".results-controls__btn"));
+  els.targetContainer = document.getElementById("target-container");
   applyResultsLayout(state.resultsLayout);
 
   setStatus("Idle", "Select a target video and run a search.");

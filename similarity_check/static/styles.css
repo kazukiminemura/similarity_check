@@ -15,7 +15,7 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: 1fr; /* Stack sections vertically */
   gap: 16px;
   padding: 24px;
   max-width: 960px;
@@ -147,6 +147,17 @@ button:disabled {
   margin: 0;
 }
 
+/* Target preview block placed above results grid */
+.target {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .results__topline {
   display: flex;
   align-items: center;
@@ -198,6 +209,11 @@ button:disabled {
   border-radius: 8px;
   background: #000;
   border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Make target preview video a bit larger */
+.target .results__video {
+  max-height: 320px;
 }
 
 .results__badge {
