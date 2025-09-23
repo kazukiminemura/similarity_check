@@ -259,52 +259,93 @@ async def search(payload: dict):
 
     # Helper to run feature extraction pipeline with a specific device
     def _run_with_device(dev: str):
-        # Target features (with cache) - swing-only cache dir
-        cache_dir = "features_cache_swing" if swing_only else "features_cache"
+        # Caches
+        swing_cache_dir = "features_cache_swing"
+        full_cache_dir = "features_cache"
+        clip_cache_dir = "features_cache_clip"
         # If recompute requested, remove any existing caches for the target
         if recompute:
             try:
-                for d in ("features_cache", "features_cache_swing"):
+                for d in (full_cache_dir, swing_cache_dir, clip_cache_dir):
                     base = osp.splitext(osp.basename(tgt_path))[0]
                     cpath = osp.join(d, f"{base}.npz")
                     if osp.exists(cpath):
                         os.remove(cpath)
             except Exception:
                 pass
-        vec = None if recompute else load_feature_cache(cache_dir, tgt_path)
+        # 1) Target: ensure a clip exists first, then compute features on the clip
         tgt_window = None
-        if vec is None:
+        # Try read swing window from cache
+        try:
+            meta = load_feature_meta(swing_cache_dir, tgt_path)
+            ws = meta.get("window_start_sec")
+            we = meta.get("window_end_sec")
+            if ws is not None and we is not None:
+                tgt_window = (float(ws), float(we))
+        except Exception:
+            pass
+        if tgt_window is None or recompute:
             info = extract_video_features(
                 tgt_path,
                 model,
                 frame_stride=frame_stride,
                 device=dev,
-                swing_only=swing_only,
+                swing_only=True,
                 swing_seconds=swing_seconds,
             )
-            vec = info["vector"]
             ws = float(info.get("window_start_sec", -1.0)) if isinstance(info, dict) else -1.0
             we = float(info.get("window_end_sec", -1.0)) if isinstance(info, dict) else -1.0
             if ws >= 0 and we >= 0:
                 tgt_window = (ws, we)
             save_feature_cache(
-                cache_dir,
+                swing_cache_dir,
                 tgt_path,
-                vec,
+                info["vector"],
                 window_start_sec=(ws if ws >= 0 else None),
                 window_end_sec=(we if we >= 0 else None),
                 frame_stride=frame_stride,
             )
-        else:
-            # try to read window from cache meta if available
-            try:
-                meta = load_feature_meta(cache_dir, tgt_path)
-                ws = meta.get("window_start_sec")
-                we = meta.get("window_end_sec")
-                if ws is not None and we is not None:
-                    tgt_window = (float(ws), float(we))
-            except Exception:
-                pass
+
+        # Create or find target clip
+        tgt_clip_path = None
+        if tgt_window is not None:
+            tws, twe = tgt_window
+            tgt_clip_path = make_video_clip(
+                tgt_path,
+                float(tws),
+                float(twe),
+                CLIP_DIR,
+                basename=osp.splitext(osp.basename(tgt_path))[0],
+            )
+        # Compute target vector from the clip (preferred)
+        tgt_vec = None
+        if tgt_clip_path and osp.exists(tgt_clip_path):
+            tgt_vec = None if recompute else load_feature_cache(clip_cache_dir, tgt_clip_path)
+            if tgt_vec is None:
+                info_clip = extract_video_features(
+                    tgt_clip_path,
+                    model,
+                    frame_stride=frame_stride,
+                    device=dev,
+                    swing_only=False,
+                    swing_seconds=swing_seconds,
+                )
+                tgt_vec = info_clip["vector"]
+                save_feature_cache(clip_cache_dir, tgt_clip_path, tgt_vec, frame_stride=frame_stride)
+        # Fallback to full video vector if clip failed
+        if tgt_vec is None:
+            tgt_vec = None if recompute else load_feature_cache(full_cache_dir, tgt_path)
+            if tgt_vec is None:
+                info_full = extract_video_features(
+                    tgt_path,
+                    model,
+                    frame_stride=frame_stride,
+                    device=dev,
+                    swing_only=True,
+                    swing_seconds=swing_seconds,
+                )
+                tgt_vec = info_full["vector"]
+                save_feature_cache(full_cache_dir, tgt_path, tgt_vec)
 
         # Candidates
         cand_paths: List[Tuple[str, object]] = []
@@ -322,46 +363,75 @@ async def search(payload: dict):
 
         logger.debug("Candidates discovered: %d", len(cand_paths))
 
-        # Compute features for candidates
+        # Compute features for candidates (create clips first, then compare)
         cand_vecs: List[Tuple[str, object]] = []
-        cand_windows = {}
         clip_pool: List[dict] = []
         used_clip_paths = set()
         for p, _ in cand_paths:
-            if recompute:
-                try:
-                    for d in ("features_cache", "features_cache_swing"):
-                        base = osp.splitext(osp.basename(p))[0]
-                        cpath = osp.join(d, f"{base}.npz")
-                        if osp.exists(cpath):
-                            os.remove(cpath)
-                except Exception:
-                    pass
-            v = None if recompute else load_feature_cache(cache_dir, p)
-            if v is None:
+            # Ensure swing window and clip for candidate
+            c_window = None
+            try:
+                meta = load_feature_meta(swing_cache_dir, p)
+                ws = meta.get("window_start_sec")
+                we = meta.get("window_end_sec")
+                if ws is not None and we is not None:
+                    c_window = (float(ws), float(we))
+            except Exception:
+                pass
+            if c_window is None or recompute:
                 info = extract_video_features(
                     p,
                     model,
                     frame_stride=frame_stride,
                     device=dev,
-                    swing_only=swing_only,
+                    swing_only=True,
                     swing_seconds=swing_seconds,
                 )
-                v = info["vector"]
                 ws = float(info.get("window_start_sec", -1.0)) if isinstance(info, dict) else -1.0
                 we = float(info.get("window_end_sec", -1.0)) if isinstance(info, dict) else -1.0
-                save_feature_cache(cache_dir, p, v, window_start_sec=(ws if ws >= 0 else None), window_end_sec=(we if ws >= 0 else None), frame_stride=frame_stride)
                 if ws >= 0 and we >= 0:
-                    cand_windows[p] = (ws, we)
-            else:
-                meta = load_feature_meta(cache_dir, p)
-                ws = meta.get("window_start_sec")
-                we = meta.get("window_end_sec")
-                if ws is not None and we is not None:
-                    cand_windows[p] = (ws, we)
-            cand_vecs.append((p, v))
+                    c_window = (ws, we)
+                save_feature_cache(
+                    swing_cache_dir,
+                    p,
+                    info["vector"],
+                    window_start_sec=(ws if ws >= 0 else None),
+                    window_end_sec=(we if we >= 0 else None),
+                    frame_stride=frame_stride,
+                )
+            clip_path = None
+            if c_window is not None:
+                cws, cwe = c_window
+                clip_path = make_video_clip(p, float(cws), float(cwe), CLIP_DIR, basename=osp.splitext(osp.basename(p))[0])
+            # Compute vector on clip
+            vec_c = None
+            if clip_path and osp.exists(clip_path):
+                vec_c = None if recompute else load_feature_cache(clip_cache_dir, clip_path)
+                if vec_c is None:
+                    info_c = extract_video_features(
+                        clip_path,
+                        model,
+                        frame_stride=frame_stride,
+                        device=dev,
+                        swing_only=False,
+                        swing_seconds=swing_seconds,
+                    )
+                    vec_c = info_c["vector"]
+                    save_feature_cache(clip_cache_dir, clip_path, vec_c, frame_stride=frame_stride)
+            # Fallback: compute on full video window if clip missing
+            if vec_c is None:
+                info_f = extract_video_features(
+                    p,
+                    model,
+                    frame_stride=frame_stride,
+                    device=dev,
+                    swing_only=True,
+                    swing_seconds=swing_seconds,
+                )
+                vec_c = info_f["vector"]
+            cand_vecs.append((clip_path or p, vec_c))
 
-        ranked = rank_similar(vec, cand_vecs)[:topk]
+        ranked = rank_similar(tgt_vec, cand_vecs)[:topk]
         logger.debug("Ranking complete: returned=%d", len(ranked))
         results = []
         for (p, score) in ranked:
@@ -375,19 +445,15 @@ async def search(payload: dict):
                 "original_path": p,
                 "source": "reference",
             }
-            if swing_only:
-                # try read window meta from cache if available
-                try:
-                    meta = load_feature_meta(cache_dir, p)
-                    ws = meta.get("window_start_sec")
-                    we = meta.get("window_end_sec")
-                    if ws is not None and we is not None:
-                        item["start"], item["end"] = float(ws), float(we)
-                        clip_path = make_video_clip(p, float(ws), float(we), CLIP_DIR, basename=osp.splitext(osp.basename(p))[0])
-                        if clip_path and osp.exists(clip_path):
-                            _assign_clip_metadata(item, clip_path)
-                except Exception:
-                    pass
+            # Prefer the generated clip for display
+            try:
+                base = osp.splitext(osp.basename(p))[0]
+                pattern = osp.join(CLIP_DIR, f"{base}_clip*.mp4")
+                matches = sorted(glob.glob(pattern))
+                if matches:
+                    _assign_clip_metadata(item, matches[0])
+            except Exception:
+                pass
             # Fallback: if a pre-generated clip exists in the clip directory, use it
             if "clip_url" not in item:
                 base = osp.splitext(osp.basename(p))[0]
@@ -409,12 +475,11 @@ async def search(payload: dict):
             "original_path": tgt_path,
             "source": "target",
         }
-        if swing_only and tgt_window:
+        if tgt_window:
             tws, twe = tgt_window
             target_entry["start"], target_entry["end"] = float(tws), float(twe)
-            clip_path = make_video_clip(tgt_path, float(tws), float(twe), CLIP_DIR, basename=osp.splitext(osp.basename(tgt_path))[0])
-            if clip_path and osp.exists(clip_path):
-                _assign_clip_metadata(target_entry, clip_path)
+            if tgt_clip_path and osp.exists(tgt_clip_path):
+                _assign_clip_metadata(target_entry, tgt_clip_path)
                 if target_entry.get("clip_abs"):
                     used_clip_paths.add(target_entry["clip_abs"])
         # Fallback: use existing clip if present even when swing_only is false
