@@ -6,7 +6,7 @@ import logging
 import functools
 import inspect
 import glob
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -412,6 +412,7 @@ async def search(payload: dict):
 
         # Compute features for candidates (create clips first, then compare)
         cand_vecs: List[Tuple[str, object]] = []
+        cand_meta: Dict[str, dict] = {}
         clip_pool: List[dict] = []
         used_clip_paths = set()
         for p, _ in cand_paths:
@@ -452,90 +453,91 @@ async def search(payload: dict):
                     frame_stride=frame_stride,
                 )
             clip_path = None
+            base_name = osp.splitext(osp.basename(p))[0]
             if c_window is not None:
                 cws, cwe = c_window
                 t1 = time.perf_counter()
-                clip_path = make_video_clip(p, float(cws), float(cwe), CLIP_DIR, basename=osp.splitext(osp.basename(p))[0])
+                clip_path = make_video_clip(
+                    p,
+                    float(cws),
+                    float(cwe),
+                    CLIP_DIR,
+                    basename=base_name,
+                )
                 dt = (time.perf_counter() - t1)
                 timings["clip_seconds"] += dt
                 logger.debug("Candidate clip created in %.3fs: %s", dt, clip_path or "<none>")
                 if clip_path:
                     counters["clips_created"] += 1
-            # Compute vector on clip
-            vec_c = None
-            if clip_path and osp.exists(clip_path):
-                vec_c = None if recompute else load_feature_cache(clip_cache_dir, clip_path)
-                if vec_c is None:
-                    t1 = time.perf_counter()
-                    info_c = extract_video_features(
-                        clip_path,
-                        model,
-                        frame_stride=frame_stride,
-                        device=dev,
-                        swing_only=False,
-                        swing_seconds=swing_seconds,
-                    )
-                    dt = (time.perf_counter() - t1)
-                    timings["feature_seconds"] += dt
-                    counters["feature_calls"] += 1
-                    logger.debug("Candidate clip features in %.3fs: %s", dt, clip_path)
-                    vec_c = info_c["vector"]
-                    save_feature_cache(clip_cache_dir, clip_path, vec_c, frame_stride=frame_stride)
-            # Fallback: compute on full video window if clip missing
+            if not clip_path:
+                try:
+                    pattern = osp.join(CLIP_DIR, f"{base_name}_clip*.mp4")
+                    matches = sorted(glob.glob(pattern))
+                    if matches:
+                        clip_path = matches[0]
+                except Exception:
+                    clip_path = None
+            if not clip_path or not osp.exists(clip_path):
+                logger.debug("No clip available for candidate %s; skipping", p)
+                continue
+            if clip_path in cand_meta:
+                logger.debug("Clip already processed for candidate %s: %s", p, clip_path)
+                continue
+
+            vec_c = None if recompute else load_feature_cache(clip_cache_dir, clip_path)
             if vec_c is None:
                 t1 = time.perf_counter()
-                info_f = extract_video_features(
-                    p,
+                info_c = extract_video_features(
+                    clip_path,
                     model,
                     frame_stride=frame_stride,
                     device=dev,
-                    swing_only=True,
+                    swing_only=False,
                     swing_seconds=swing_seconds,
                 )
                 dt = (time.perf_counter() - t1)
                 timings["feature_seconds"] += dt
                 counters["feature_calls"] += 1
-                logger.debug("Candidate full-video features in %.3fs: %s", dt, p)
-                vec_c = info_f["vector"]
-            cand_vecs.append((clip_path or p, vec_c))
+                logger.debug("Candidate clip features in %.3fs: %s", dt, clip_path)
+                vec_c = info_c.get("vector") if isinstance(info_c, dict) else None
+                if vec_c is None:
+                    logger.debug("Clip feature extraction returned no vector for %s", clip_path)
+                    continue
+                save_feature_cache(clip_cache_dir, clip_path, vec_c, frame_stride=frame_stride)
+            cand_vecs.append((clip_path, vec_c))
+            cand_meta[clip_path] = {
+                "original_path": p,
+                "window": c_window,
+            }
 
         t1 = time.perf_counter()
         ranked = rank_similar(tgt_vec, cand_vecs)[:topk]
         timings["rank_seconds"] += (time.perf_counter() - t1)
         logger.debug("Ranking complete: returned=%d", len(ranked))
         results = []
-        for (p, score) in ranked:
+        for (clip_path, score) in ranked:
+            meta = cand_meta.get(clip_path, {})
             item = {
-                "path": p,
-                "path_abs": osp.abspath(p),
-                "name": osp.basename(p),
-                "display_name": osp.basename(p),
+                "path": clip_path,
+                "path_abs": osp.abspath(clip_path),
+                "name": osp.basename(clip_path),
+                "display_name": osp.basename(clip_path),
                 "score": float(score),
-                "url": _rel_url(p),
-                "original_path": p,
-                "source": "reference",
+                "url": _rel_url(clip_path),
+                "original_path": meta.get("original_path"),
+                "source": "clip",
             }
-            # Prefer the generated clip for display
-            try:
-                base = osp.splitext(osp.basename(p))[0]
-                pattern = osp.join(CLIP_DIR, f"{base}_clip*.mp4")
-                matches = sorted(glob.glob(pattern))
-                if matches:
-                    _assign_clip_metadata(item, matches[0])
-            except Exception:
-                pass
-            # Fallback: if a pre-generated clip exists in the clip directory, use it
-            if "clip_url" not in item:
-                base = osp.splitext(osp.basename(p))[0]
-                pattern = osp.join(CLIP_DIR, f"{base}_clip*.mp4")
-                matches = sorted(glob.glob(pattern))
-                if matches:
-                    pre_clip = matches[0]
-                    _assign_clip_metadata(item, pre_clip)
-            if item.get("clip_abs"):
-                used_clip_paths.add(item["clip_abs"])
+            window = meta.get("window")
+            if window:
+                try:
+                    item["start"], item["end"] = float(window[0]), float(window[1])
+                except Exception:
+                    pass
+            _assign_clip_metadata(item, clip_path)
+            clip_abs = item.get("clip_abs")
+            if clip_abs:
+                used_clip_paths.add(clip_abs)
             results.append(item)
-
         target_entry = {
             "path": tgt_path,
             "path_abs": osp.abspath(tgt_path),

@@ -301,8 +301,49 @@ def extract_video_features(
         else:
             speed_s = speed
 
-        # Anchor the clip around the global peak wrist speed (impact proxy)
-        peak_idx = int(np.argmax(speed_s)) if speed_s.size else 0
+        # Determine swing peak; fall back to presence when wrist speed is unreliable
+        presence_arr = np.asarray(presence_scores, dtype=np.float32)
+        if presence_arr.size:
+            presence_arr = presence_arr[: per_frame.shape[0]]
+        peak_idx = 0
+        max_speed = 0.0
+        positive_samples = 0
+        if speed_s.size:
+            peak_idx = int(np.argmax(speed_s))
+            max_speed = float(speed_s[peak_idx])
+            positive_samples = int(np.count_nonzero(speed_s > 1e-3))
+        reliable_peak = speed_s.size > 0 and max_speed > 1e-3
+
+        if reliable_peak and speed_threshold is not None:
+            thr = float(speed_threshold)
+            high_mask = speed_s > thr
+            if high_mask.any():
+                if min_consecutive_high > 1:
+                    best_len = 0
+                    best_center = peak_idx
+                    run_len = 0
+                    for i, flag in enumerate(high_mask):
+                        if flag:
+                            run_len += 1
+                            if run_len > best_len:
+                                best_len = run_len
+                                best_center = i - run_len // 2
+                        else:
+                            run_len = 0
+                    if best_len >= min_consecutive_high:
+                        peak_idx = int(best_center)
+                    elif positive_samples < min_consecutive_high:
+                        reliable_peak = False
+            else:
+                reliable_peak = False
+
+        if not reliable_peak:
+            if presence_arr.size:
+                peak_idx = int(np.argmax(presence_arr))
+            else:
+                peak_idx = per_frame.shape[0] // 2
+
+        peak_idx = max(0, min(peak_idx, per_frame.shape[0] - 1))
 
         # Compute window length in samples
         if swing_seconds is None:
