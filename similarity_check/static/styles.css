@@ -92,6 +92,25 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Improve select dropdown readability with blue theme */
+select {
+  background-color: #0f2747; /* deep blue */
+  border-color: rgba(88, 166, 255, 0.6);
+  color: #eaf2ff;
+}
+
+select:focus {
+  outline: none;
+  border-color: #58a6ff;
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.35);
+}
+
+/* Many browsers honor colors on <option> */
+option {
+  background-color: #0f2747; /* same as select */
+  color: #eaf2ff;
+}
+
 .form__actions {
   display: flex;
   gap: 8px;
