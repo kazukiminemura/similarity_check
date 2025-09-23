@@ -23,6 +23,7 @@ from similarity_check.features import (
 )
 from similarity_check.similarity import rank_similar
 from similarity_check.video_utils import make_video_clip
+import time
 
 
 # ------------------------------------------------------------------------------
@@ -259,6 +260,18 @@ async def search(payload: dict):
 
     # Helper to run feature extraction pipeline with a specific device
     def _run_with_device(dev: str):
+        t0_total = time.perf_counter()
+        timings = {
+            "feature_seconds": 0.0,
+            "clip_seconds": 0.0,
+            "rank_seconds": 0.0,
+            "total_seconds": 0.0,
+        }
+        counters = {
+            "feature_calls": 0,
+            "clips_created": 0,
+            "candidates": 0,
+        }
         # Caches
         swing_cache_dir = "features_cache_swing"
         full_cache_dir = "features_cache"
@@ -285,6 +298,7 @@ async def search(payload: dict):
         except Exception:
             pass
         if tgt_window is None or recompute:
+            t1 = time.perf_counter()
             info = extract_video_features(
                 tgt_path,
                 model,
@@ -293,6 +307,10 @@ async def search(payload: dict):
                 swing_only=True,
                 swing_seconds=swing_seconds,
             )
+            dt = (time.perf_counter() - t1)
+            timings["feature_seconds"] += dt
+            logger.debug("Target swing window features in %.3fs: %s", dt, tgt_path)
+            counters["feature_calls"] += 1
             ws = float(info.get("window_start_sec", -1.0)) if isinstance(info, dict) else -1.0
             we = float(info.get("window_end_sec", -1.0)) if isinstance(info, dict) else -1.0
             if ws >= 0 and we >= 0:
@@ -310,6 +328,7 @@ async def search(payload: dict):
         tgt_clip_path = None
         if tgt_window is not None:
             tws, twe = tgt_window
+            t1 = time.perf_counter()
             tgt_clip_path = make_video_clip(
                 tgt_path,
                 float(tws),
@@ -317,11 +336,17 @@ async def search(payload: dict):
                 CLIP_DIR,
                 basename=osp.splitext(osp.basename(tgt_path))[0],
             )
+            dt = (time.perf_counter() - t1)
+            timings["clip_seconds"] += dt
+            logger.debug("Target clip created in %.3fs: %s", dt, tgt_clip_path or "<none>")
+            if tgt_clip_path:
+                counters["clips_created"] += 1
         # Compute target vector from the clip (preferred)
         tgt_vec = None
         if tgt_clip_path and osp.exists(tgt_clip_path):
             tgt_vec = None if recompute else load_feature_cache(clip_cache_dir, tgt_clip_path)
             if tgt_vec is None:
+                t1 = time.perf_counter()
                 info_clip = extract_video_features(
                     tgt_clip_path,
                     model,
@@ -330,12 +355,17 @@ async def search(payload: dict):
                     swing_only=False,
                     swing_seconds=swing_seconds,
                 )
+                dt = (time.perf_counter() - t1)
+                timings["feature_seconds"] += dt
+                logger.debug("Target clip features in %.3fs: %s", dt, tgt_clip_path)
+                counters["feature_calls"] += 1
                 tgt_vec = info_clip["vector"]
                 save_feature_cache(clip_cache_dir, tgt_clip_path, tgt_vec, frame_stride=frame_stride)
         # Fallback to full video vector if clip failed
         if tgt_vec is None:
             tgt_vec = None if recompute else load_feature_cache(full_cache_dir, tgt_path)
             if tgt_vec is None:
+                t1 = time.perf_counter()
                 info_full = extract_video_features(
                     tgt_path,
                     model,
@@ -344,6 +374,10 @@ async def search(payload: dict):
                     swing_only=True,
                     swing_seconds=swing_seconds,
                 )
+                dt = (time.perf_counter() - t1)
+                timings["feature_seconds"] += dt
+                logger.debug("Target full-video features in %.3fs: %s", dt, tgt_path)
+                counters["feature_calls"] += 1
                 tgt_vec = info_full["vector"]
                 save_feature_cache(full_cache_dir, tgt_path, tgt_vec)
 
@@ -362,6 +396,7 @@ async def search(payload: dict):
                 cand_paths.append((cand_dir, None))
 
         logger.debug("Candidates discovered: %d", len(cand_paths))
+        counters["candidates"] = len(cand_paths)
 
         # Compute features for candidates (create clips first, then compare)
         cand_vecs: List[Tuple[str, object]] = []
@@ -379,6 +414,7 @@ async def search(payload: dict):
             except Exception:
                 pass
             if c_window is None or recompute:
+                t1 = time.perf_counter()
                 info = extract_video_features(
                     p,
                     model,
@@ -387,6 +423,10 @@ async def search(payload: dict):
                     swing_only=True,
                     swing_seconds=swing_seconds,
                 )
+                dt = (time.perf_counter() - t1)
+                timings["feature_seconds"] += dt
+                counters["feature_calls"] += 1
+                logger.debug("Candidate swing window features in %.3fs: %s", dt, p)
                 ws = float(info.get("window_start_sec", -1.0)) if isinstance(info, dict) else -1.0
                 we = float(info.get("window_end_sec", -1.0)) if isinstance(info, dict) else -1.0
                 if ws >= 0 and we >= 0:
@@ -402,12 +442,19 @@ async def search(payload: dict):
             clip_path = None
             if c_window is not None:
                 cws, cwe = c_window
+                t1 = time.perf_counter()
                 clip_path = make_video_clip(p, float(cws), float(cwe), CLIP_DIR, basename=osp.splitext(osp.basename(p))[0])
+                dt = (time.perf_counter() - t1)
+                timings["clip_seconds"] += dt
+                logger.debug("Candidate clip created in %.3fs: %s", dt, clip_path or "<none>")
+                if clip_path:
+                    counters["clips_created"] += 1
             # Compute vector on clip
             vec_c = None
             if clip_path and osp.exists(clip_path):
                 vec_c = None if recompute else load_feature_cache(clip_cache_dir, clip_path)
                 if vec_c is None:
+                    t1 = time.perf_counter()
                     info_c = extract_video_features(
                         clip_path,
                         model,
@@ -416,10 +463,15 @@ async def search(payload: dict):
                         swing_only=False,
                         swing_seconds=swing_seconds,
                     )
+                    dt = (time.perf_counter() - t1)
+                    timings["feature_seconds"] += dt
+                    counters["feature_calls"] += 1
+                    logger.debug("Candidate clip features in %.3fs: %s", dt, clip_path)
                     vec_c = info_c["vector"]
                     save_feature_cache(clip_cache_dir, clip_path, vec_c, frame_stride=frame_stride)
             # Fallback: compute on full video window if clip missing
             if vec_c is None:
+                t1 = time.perf_counter()
                 info_f = extract_video_features(
                     p,
                     model,
@@ -428,10 +480,16 @@ async def search(payload: dict):
                     swing_only=True,
                     swing_seconds=swing_seconds,
                 )
+                dt = (time.perf_counter() - t1)
+                timings["feature_seconds"] += dt
+                counters["feature_calls"] += 1
+                logger.debug("Candidate full-video features in %.3fs: %s", dt, p)
                 vec_c = info_f["vector"]
             cand_vecs.append((clip_path or p, vec_c))
 
+        t1 = time.perf_counter()
         ranked = rank_similar(tgt_vec, cand_vecs)[:topk]
+        timings["rank_seconds"] += (time.perf_counter() - t1)
         logger.debug("Ranking complete: returned=%d", len(ranked))
         results = []
         for (p, score) in ranked:
@@ -512,7 +570,20 @@ async def search(payload: dict):
                     "source": "clip",
                 })
 
-        return {"used_device": dev, "target": target_entry, "results": results, "clip_pool": clip_pool}
+        timings["total_seconds"] = (time.perf_counter() - t0_total)
+        logger.debug(
+            "Timing summary: total=%.3fs feature=%.3fs clip=%.3fs rank=%.3fs | candidates=%d feature_calls=%d clips=%d",
+            timings["total_seconds"], timings["feature_seconds"], timings["clip_seconds"], timings["rank_seconds"],
+            counters.get("candidates", 0), counters.get("feature_calls", 0), counters.get("clips_created", 0)
+        )
+        return {
+            "used_device": dev,
+            "target": target_entry,
+            "results": results,
+            "clip_pool": clip_pool,
+            "timings": timings,
+            "counters": counters,
+        }
 
     # Try requested device; on failure, retry with CPU
     try:

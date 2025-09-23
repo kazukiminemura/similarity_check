@@ -1,4 +1,4 @@
-"""
+"""  """"""
 Expose FastAPI application as `app` for `uvicorn app:app`.
 
 Usage:

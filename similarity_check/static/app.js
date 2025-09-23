@@ -284,7 +284,23 @@ function renderResults(payload, topk) {
 
   if (els.resultsMeta) {
     const device = payload.used_device || els.deviceSelect?.value || "AUTO";
-    els.resultsMeta.textContent = `${rankedCount} ranked · ${clipCount} from clips · ${emptyCount} empty · device ${device}`;
+    const t = payload.timings || {};
+    const c = payload.counters || {};
+    const fmt = (x) => (typeof x === "number" && isFinite(x) ? x.toFixed(2) : "-");
+    let meta = `${rankedCount} ranked · ${clipCount} from clips · ${emptyCount} empty · device ${device}`;
+    const parts = [];
+    if (t.clip_seconds != null) parts.push(`clip ${fmt(t.clip_seconds)}s`);
+    if (t.feature_seconds != null) parts.push(`features ${fmt(t.feature_seconds)}s`);
+    if (t.rank_seconds != null) parts.push(`rank ${fmt(t.rank_seconds)}s`);
+    if (t.total_seconds != null) parts.push(`total ${fmt(t.total_seconds)}s`);
+    if (parts.length) meta += ` · ${parts.join(" · ")}`;
+    if (c.feature_calls || c.clips_created) {
+      const counts = [];
+      if (c.feature_calls) counts.push(`${c.feature_calls} feat calls`);
+      if (c.clips_created) counts.push(`${c.clips_created} clips`);
+      if (counts.length) meta += ` · ${counts.join(", ")}`;
+    }
+    els.resultsMeta.textContent = meta;
   }
 }
 
