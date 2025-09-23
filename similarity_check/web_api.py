@@ -49,32 +49,44 @@ def _shorten(value, maxlen: int = 200):
 
 
 def debug_log(func):
-    """Decorator to log function entry/exit and exceptions (sync/async)."""
+    """Decorator to log function entry/exit, runtime, and exceptions (sync/async)."""
+    func_name = func.__name__
+    qual_name = getattr(func, "__qualname__", func_name)
+    func_label = f"{func.__module__}.{qual_name}"
     if inspect.iscoroutinefunction(func):
         @functools.wraps(func)
         async def _awrap(*args, **kwargs):
-            logger.debug("ENTER %s args=%s kwargs=%s", func.__name__, _shorten(args), _shorten(kwargs))
+            logger.debug("ENTER %s args=%s kwargs=%s", func_name, _shorten(args), _shorten(kwargs))
+            start = time.perf_counter()
             try:
                 result = await func(*args, **kwargs)
-                logger.debug("EXIT  %s -> %s", func.__name__, _shorten(result))
+                elapsed = time.perf_counter() - start
+                logger.info("TIME  %s took %.3fs", func_label, elapsed)
+                logger.debug("EXIT  %s (%.3fs) -> %s", func_name, elapsed, _shorten(result))
                 return result
             except Exception:
-                logger.exception("ERROR in %s", func.__name__)
+                elapsed = time.perf_counter() - start
+                logger.info("TIME  %s failed after %.3fs", func_label, elapsed)
+                logger.exception("ERROR in %s", func_label)
                 raise
         return _awrap
     else:
         @functools.wraps(func)
         def _wrap(*args, **kwargs):
-            logger.debug("ENTER %s args=%s kwargs=%s", func.__name__, _shorten(args), _shorten(kwargs))
+            logger.debug("ENTER %s args=%s kwargs=%s", func_name, _shorten(args), _shorten(kwargs))
+            start = time.perf_counter()
             try:
                 result = func(*args, **kwargs)
-                logger.debug("EXIT  %s -> %s", func.__name__, _shorten(result))
+                elapsed = time.perf_counter() - start
+                logger.info("TIME  %s took %.3fs", func_label, elapsed)
+                logger.debug("EXIT  %s (%.3fs) -> %s", func_name, elapsed, _shorten(result))
                 return result
             except Exception:
-                logger.exception("ERROR in %s", func.__name__)
+                elapsed = time.perf_counter() - start
+                logger.info("TIME  %s failed after %.3fs", func_label, elapsed)
+                logger.exception("ERROR in %s", func_label)
                 raise
         return _wrap
-
 
 BASE_DIR = osp.abspath(osp.join(osp.dirname(__file__), os.pardir))
 
