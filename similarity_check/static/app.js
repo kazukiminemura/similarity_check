@@ -139,10 +139,13 @@ function createVideoElement(entry) {
   video.playsInline = true;
   video.preload = "metadata";
   video.src = src;
+  // remember clip window for sync controls
+  const start = typeof entry?.start === "number" ? entry.start : (entry?.clip_url ? 0 : undefined);
+  const end = typeof entry?.end === "number" ? entry.end : undefined;
+  if (start != null) video.dataset.clipStart = String(start);
+  if (end != null) video.dataset.clipEnd = String(end);
 
   const hasClipSrc = Boolean(entry?.clip_url);
-  const start = typeof entry?.start === "number" ? entry.start : undefined;
-  const end = typeof entry?.end === "number" ? entry.end : undefined;
 
   if (!hasClipSrc && (start !== undefined || end !== undefined)) {
     const startTime = Number(start);
@@ -414,6 +417,30 @@ function bindEvents() {
       });
     });
   }
+  // Group video controls
+  const getVideos = () => Array.from(document.querySelectorAll("#target-container video, #results-list video"));
+  document.getElementById("play-all")?.addEventListener("click", () => {
+    // align starts before playing
+    getVideos().forEach((v) => {
+      const s = parseFloat(v.dataset.clipStart || "NaN");
+      if (!Number.isNaN(s)) {
+        try { v.currentTime = s; } catch (_) {}
+      } else if (v.readyState > 0) {
+        try { v.currentTime = 0; } catch (_) {}
+      }
+    });
+    getVideos().forEach((v) => { try { v.play(); } catch (_) {} });
+  });
+  document.getElementById("pause-all")?.addEventListener("click", () => {
+    getVideos().forEach((v) => { try { v.pause(); } catch (_) {} });
+  });
+  document.getElementById("restart-all")?.addEventListener("click", () => {
+    getVideos().forEach((v) => {
+      const s = parseFloat(v.dataset.clipStart || "0");
+      try { v.currentTime = Number.isNaN(s) ? 0 : s; } catch (_) {}
+      try { v.pause(); } catch (_) {}
+    });
+  });
 }
 
 async function init() {
