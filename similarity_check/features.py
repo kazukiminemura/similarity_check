@@ -165,6 +165,9 @@ def extract_video_features(
     device: Optional[str] = None,
     swing_only: bool = False,
     swing_seconds: Optional[float] = 5,
+    *,
+    speed_threshold: Optional[float] = 0.6,
+    min_consecutive_high: int = 3,
 ) -> Dict[str, np.ndarray]:
     """
     Run pose estimation and build a video-level descriptor.
@@ -188,6 +191,11 @@ def extract_video_features(
 
     frame_idx = 0
     used = 0
+    # store wrist keypoints for speed-based swing detection (normalized coords)
+    left_wrist_xy: List[Tuple[float, float]] = []
+    right_wrist_xy: List[Tuple[float, float]] = []
+    left_wrist_conf: List[float] = []
+    right_wrist_conf: List[float] = []
     for _ in pbar:
         ret, frame = cap.read()
         if not ret:
@@ -221,6 +229,21 @@ def extract_video_features(
         if feat is None:
             continue
         used_features.append(feat)
+        # collect wrist points (COCO: 9 left_wrist, 10 right_wrist)
+        try:
+            lw = xyn[n_idx, 9]
+            rw = xyn[n_idx, 10]
+            lc = float(conf[n_idx, 9])
+            rc = float(conf[n_idx, 10])
+        except Exception:
+            lw = np.array([np.nan, np.nan], dtype=np.float32)
+            rw = np.array([np.nan, np.nan], dtype=np.float32)
+            lc = 0.0
+            rc = 0.0
+        left_wrist_xy.append((float(lw[0]), float(lw[1])))
+        right_wrist_xy.append((float(rw[0]), float(rw[1])))
+        left_wrist_conf.append(lc if np.isfinite(lc) else 0.0)
+        right_wrist_conf.append(rc if np.isfinite(rc) else 0.0)
         # presence score: ratio of valid joints times their mean confidence
         try:
             cj = conf[n_idx]
@@ -244,58 +267,60 @@ def extract_video_features(
 
     per_frame = np.stack(used_features, axis=0)  # (T, 34)
 
-    # Optionally select a swing-only window by motion peak
+    # Optionally select a swing-only window.
     window_start_sec: Optional[float] = None
     window_end_sec: Optional[float] = None
     if swing_only and per_frame.shape[0] > 4:
-        diffs = np.abs(np.diff(per_frame, axis=0))  # (T-1, 34)
-        energy = diffs.mean(axis=1)  # (T-1,)
-        # weight by presence/visibility of keypoints to reduce false peaks
-        try:
-            pres = np.asarray(presence_scores, dtype=np.float32)
-            pres = np.clip(pres, 0.0, 1.0)
-            w = np.minimum(pres[:-1], pres[1:])
-            energy = energy * (w + 1e-6)
-        except Exception:
-            pass
-        # smooth with moving average (~0.25s)
+        # Compute wrist speed per-sample (normalized units per second)
         samples_per_second = max(1.0, fps / max(1, frame_stride))
+        lw = np.asarray(left_wrist_xy, dtype=np.float32)
+        rw = np.asarray(right_wrist_xy, dtype=np.float32)
+        lc = np.asarray(left_wrist_conf, dtype=np.float32)
+        rc = np.asarray(right_wrist_conf, dtype=np.float32)
+        # distances between consecutive samples; mask with confidences
+        def pairwise_speed(xy, c):
+            if xy.shape[0] < 2:
+                return np.zeros((0,), dtype=np.float32)
+            d = np.linalg.norm(np.diff(xy, axis=0), axis=1)
+            valid = np.minimum(c[:-1] > 0, c[1:] > 0)
+            d[~valid] = 0.0
+            return d * samples_per_second
+        sp_l = pairwise_speed(lw, lc)
+        sp_r = pairwise_speed(rw, rc)
+        speed = np.maximum(sp_l, sp_r)  # (T-1,)
+        # Smooth with ~0.25s moving average
         k = max(3, int(round(samples_per_second * 0.25)))
         if k % 2 == 0:
             k += 1
-        if energy.shape[0] >= k:
+        if speed.shape[0] >= k:
             kernel = np.ones(k, dtype=np.float32) / float(k)
-            energy_s = np.convolve(energy, kernel, mode='same')
+            speed_s = np.convolve(speed, kernel, mode='same')
         else:
-            energy_s = energy
-        peak = int(np.argmax(energy_s))  # center between frames peak and peak+1
+            speed_s = speed
+        # Determine threshold; fallback to robust percentile if not provided
+        thr = speed_threshold if (speed_threshold is not None and speed_threshold > 0) else None
+        if thr is None:
+            thr = float(np.percentile(speed_s, 85)) if speed_s.size else 0.5
+        # Find first run of consecutive samples over threshold
+        over = speed_s > float(thr)
+        start_idx = None
+        if over.any():
+            cnt = 0
+            for i, v in enumerate(over):
+                cnt = cnt + 1 if v else 0
+                if cnt >= max(1, int(min_consecutive_high)):
+                    start_idx = i - cnt + 1
+                    break
+        if start_idx is None:
+            # Fallback: use maximum speed index
+            start_idx = int(np.argmax(speed_s)) if speed_s.size else 0
+        # Compute window length in samples
         if swing_seconds is None:
             swing_seconds = 5
-        # samples_per_second under the given stride (recomputed above)
-        win = int(max(5, min(per_frame.shape[0], round(samples_per_second * swing_seconds))))
-        half = max(2, win // 2)
-        start = max(0, peak - half)
+        win = int(max(5, round(samples_per_second * swing_seconds)))
+        start = max(0, start_idx)
         end = min(per_frame.shape[0], start + win)
-        start = max(0, end - win)  # ensure exact window length
-        # If presence is very low near peak, fallback to best-present segment
-        try:
-            if pres.size:
-                present_mask = pres > 0.25
-                # find longest contiguous run
-                if present_mask.any() and (w if 'w' in locals() else pres[:-1]).max() < 0.05:
-                    # fallback center of present region
-                    idxs = np.where(present_mask)[0]
-                    center = int(idxs.mean())
-                    start = max(0, center - half)
-                    end = min(per_frame.shape[0], start + win)
-                    start = max(0, end - win)
-        except Exception:
-            pass
-        logger.debug(
-            "Swing window: fps=%.2f stride=%d samples/s=%.2f win=%d idx=[%d:%d]",
-            fps, frame_stride, samples_per_second, end - start, start, end,
-        )
-        # convert sample indices to seconds in original video timeline
+        # Convert indices to seconds
         window_start_sec = float(start * frame_stride) / float(max(1.0, fps))
         window_end_sec = float(end * frame_stride) / float(max(1.0, fps))
         per_frame = per_frame[start:end]
