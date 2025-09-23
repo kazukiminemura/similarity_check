@@ -283,7 +283,28 @@ async def search(payload: dict):
                 swing_seconds=swing_seconds,
             )
             vec = info["vector"]
-            save_feature_cache(cache_dir, tgt_path, vec, window_start_sec=(float(info.get("window_start_sec", -1.0)) if isinstance(info, dict) else None), window_end_sec=(float(info.get("window_end_sec", -1.0)) if isinstance(info, dict) else None), frame_stride=frame_stride)
+            ws = float(info.get("window_start_sec", -1.0)) if isinstance(info, dict) else -1.0
+            we = float(info.get("window_end_sec", -1.0)) if isinstance(info, dict) else -1.0
+            if ws >= 0 and we >= 0:
+                tgt_window = (ws, we)
+            save_feature_cache(
+                cache_dir,
+                tgt_path,
+                vec,
+                window_start_sec=(ws if ws >= 0 else None),
+                window_end_sec=(we if we >= 0 else None),
+                frame_stride=frame_stride,
+            )
+        else:
+            # try to read window from cache meta if available
+            try:
+                meta = load_feature_meta(cache_dir, tgt_path)
+                ws = meta.get("window_start_sec")
+                we = meta.get("window_end_sec")
+                if ws is not None and we is not None:
+                    tgt_window = (float(ws), float(we))
+            except Exception:
+                pass
 
         # Candidates
         cand_paths: List[Tuple[str, object]] = []
