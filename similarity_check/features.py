@@ -277,6 +277,7 @@ def extract_video_features(
         rw = np.asarray(right_wrist_xy, dtype=np.float32)
         lc = np.asarray(left_wrist_conf, dtype=np.float32)
         rc = np.asarray(right_wrist_conf, dtype=np.float32)
+
         # distances between consecutive samples; mask with confidences
         def pairwise_speed(xy, c):
             if xy.shape[0] < 2:
@@ -285,11 +286,13 @@ def extract_video_features(
             valid = np.minimum(c[:-1] > 0, c[1:] > 0)
             d[~valid] = 0.0
             return d * samples_per_second
+
         sp_l = pairwise_speed(lw, lc)
         sp_r = pairwise_speed(rw, rc)
         speed = np.maximum(sp_l, sp_r)  # (T-1,)
-        # Smooth with ~0.25s moving average
-        k = max(3, int(round(samples_per_second * 0.25)))
+
+        # Smooth with ~0.30s moving average to reduce noise
+        k = max(3, int(round(samples_per_second * 0.30)))
         if k % 2 == 0:
             k += 1
         if speed.shape[0] >= k:
@@ -297,29 +300,20 @@ def extract_video_features(
             speed_s = np.convolve(speed, kernel, mode='same')
         else:
             speed_s = speed
-        # Determine threshold; fallback to robust percentile if not provided
-        thr = speed_threshold if (speed_threshold is not None and speed_threshold > 0) else None
-        if thr is None:
-            thr = float(np.percentile(speed_s, 85)) if speed_s.size else 0.5
-        # Find first run of consecutive samples over threshold
-        over = speed_s > float(thr)
-        start_idx = None
-        if over.any():
-            cnt = 0
-            for i, v in enumerate(over):
-                cnt = cnt + 1 if v else 0
-                if cnt >= max(1, int(min_consecutive_high)):
-                    start_idx = i - cnt + 1
-                    break
-        if start_idx is None:
-            # Fallback: use maximum speed index
-            start_idx = int(np.argmax(speed_s)) if speed_s.size else 0
+
+        # Anchor the clip around the global peak wrist speed (impact proxy)
+        peak_idx = int(np.argmax(speed_s)) if speed_s.size else 0
+
         # Compute window length in samples
         if swing_seconds is None:
             swing_seconds = 5
         win = int(max(5, round(samples_per_second * swing_seconds)))
-        start = max(0, start_idx)
+
+        # Put ~40% of the window before the peak and 60% after
+        pre = int(round(0.4 * win))
+        start = max(0, peak_idx - pre)
         end = min(per_frame.shape[0], start + win)
+
         # Convert indices to seconds
         window_start_sec = float(start * frame_stride) / float(max(1.0, fps))
         window_end_sec = float(end * frame_stride) / float(max(1.0, fps))
